@@ -8,6 +8,8 @@ def mock_storage():
     storage = MagicMock(spec=Storage)
     storage.sqlite = MagicMock()
     storage.vector = MagicMock()
+    storage.sandbox = MagicMock()
+    storage.tool_registry = {}
     return storage
 
 def test_cost_tracker_record_usage(mock_storage):
@@ -45,8 +47,12 @@ def test_agent_loop_safety_check(mock_storage):
 @patch("litellm.completion")
 @patch("litellm.completion_cost")
 def test_run_iteration(mock_cost, mock_completion, mock_storage):
+    mock_msg = MagicMock()
+    mock_msg.content = "Goal: X"
+    mock_msg.tool_calls = None
+    
     mock_completion.return_value = MagicMock(
-        choices=[MagicMock(message=MagicMock(content="Goal: X"))],
+        choices=[MagicMock(message=mock_msg)],
         usage=MagicMock(total_tokens=50),
         model="gemini-2.0-flash"
     )
@@ -55,6 +61,6 @@ def test_run_iteration(mock_cost, mock_completion, mock_storage):
     loop = AgentLoop(storage=mock_storage)
     loop.run_iteration("Test intent")
     
-    assert mock_completion.call_count == 2 # Producer and Critic
+    assert mock_completion.call_count == 3 # Goal Gen + Producer + Critic
     mock_storage.sqlite.save_loop.assert_called_once()
     mock_storage.vector.embed_and_store.assert_called_once()

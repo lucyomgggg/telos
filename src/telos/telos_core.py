@@ -20,6 +20,12 @@ class Tool(ABC):
     def execute(self, params: Dict[str, Any]) -> str:
         pass
 
+    @property
+    @abstractmethod
+    def definition(self) -> Dict[str, Any]:
+        """Returns the litellm-compatible tool definition."""
+        pass
+
 class Memory(ABC):
     @abstractmethod
     def store(self, key: str, value: Any):
@@ -88,12 +94,30 @@ class CostTracker:
         finally:
             session.close()
 
-# --- Storage Layer ---
+# --- Template Loader ---
+
+class TemplateLoader:
+    @staticmethod
+    def load(template_name: str, fallback_text: str = "") -> str:
+        from .config import TEMPLATES_DIR
+        template_path = TEMPLATES_DIR / f"{template_name}.txt"
+        if template_path.exists():
+            return template_path.read_text().strip()
+        log.warning(f"Template {template_name} not found at {template_path}. Using fallback.")
+        return fallback_text
 
 class Storage:
     def __init__(self):
         self.sqlite = MemoryStore()
         self.vector = VectorStore()
+        from .sandbox import SandboxManager
+        from .tools import BashTool, WriteFileTool, ReadFileTool
+        self.sandbox = SandboxManager()
+        self.tool_registry: Dict[str, Tool] = {
+            "execute_command": BashTool(self.sandbox),
+            "write_file": WriteFileTool(self.sandbox),
+            "read_file": ReadFileTool(self.sandbox)
+        }
 
 # --- Agent Loop ---
 
@@ -103,6 +127,7 @@ class AgentLoop:
         self.cost_tracker = CostTracker(self.storage.sqlite)
         self.daily_limit = settings.daily_loop_limit
         self.monthly_limit = settings.monthly_cost_limit
+        self.templates = TemplateLoader()
 
     def _check_safety(self):
         daily_loops = self.cost_tracker.get_daily_loop_count()
@@ -113,50 +138,120 @@ class AgentLoop:
         if monthly_cost >= self.monthly_limit:
             raise RuntimeError(f"Monthly cost limit reached: ${monthly_cost:.2f}/${self.monthly_limit:.2f}")
 
+    def _generate_goal(self, initial_intent: str) -> str:
+        """Query memory and LLM to decide the next objective."""
+        past_loops = self.storage.sqlite.list_loops(limit=5)
+        
+        history_summary = []
+        for loop in past_loops:
+            status = loop['status']
+            score = f"{loop['score']:.2f}" if loop['score'] is not None else "N/A"
+            history_summary.append(f"- Goal: {loop['goal']} | Status: {status} | Score: {score}")
+
+        history_text = "\n".join(history_summary)
+        
+        similar = self.storage.vector.search_similar(initial_intent, limit=3)
+        similar_text = ""
+        if similar:
+            similar_text = "\nPast artifact summaries found in memory:\n" + "\n".join(
+                [f"- {s.get('payload', {})}" for s in similar]
+            )
+        
+        system_prompt = self.templates.load("goal_generation_system", "Generate a goal.")
+        user_prompt = f"Intent: {initial_intent}\n\nPast loop history:\n{history_text}{similar_text}\n\nGenerate the next goal:"
+        
+        response = litellm.completion(
+            model=settings.llm.producer_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        self.cost_tracker.record_usage(response, "producer", "pre-loop-id")
+        return response.choices[0].message.content.strip()
+
+    def start(self, loops: int = 1, initial_intent: str = "Explore and create"):
+        """Run multiple autonomous iterations."""
+        for i in range(loops):
+            log.info(f"--- Global Iteration {i+1}/{loops} ---")
+            try:
+                self.run_iteration(initial_intent)
+            except Exception as e:
+                log.error(f"Iteration failed: {e}")
+                break
+
     def run_iteration(self, initial_intent: str = "Explore the system and optimize performance"):
         self._check_safety()
         
+        # 1. Goal Generation
+        goal = self._generate_goal(initial_intent)
         loop_id = str(uuid.uuid4())
-        log.info(f"Starting loop {loop_id}")
+        log.info(f"Starting loop {loop_id} with goal: {goal}")
         
-        # 1. Retrieve Memories
-        context = self.storage.vector.search_similar(initial_intent, limit=5)
-        context_str = "\n".join([str(c['payload']) for c in context])
+        # 2. Execution Phase (Multi-step Tool Calling)
+        self.storage.sandbox.start()
+        messages = [{"role": "user", "content": f"Achieve the following goal: {goal}"}]
+        system_prompt = self.templates.load("producer_system", "Execute the goal.")
+        tools = [t.definition for t in self.storage.tool_registry.values()]
 
-        # 2. Goal Generation (Producer logic)
-        # In a real impl, this would be a completion call.
-        # Strict Separation: Critic doesn't see Producer's thought process.
+        final_result = ""
+        for step in range(10): # Max 10 steps
+            response = litellm.completion(
+                model=settings.llm.producer_model,
+                messages=[{"role": "system", "content": system_prompt}] + messages,
+                tools=tools,
+                tool_choice="auto"
+            )
+            self.cost_tracker.record_usage(response, "producer", loop_id)
+            
+            msg = response.choices[0].message
+            messages.append(msg)
+
+            if msg.tool_calls:
+                for tool_call in msg.tool_calls:
+                    import json
+                    name = tool_call.function.name
+                    args = json.loads(tool_call.function.arguments)
+                    log.info(f"[Tool] {name}({args})")
+                    
+                    tool = self.storage.tool_registry.get(name)
+                    if tool:
+                        result = tool.execute(args)
+                    else:
+                        result = f"Error: Tool {name} not found."
+                    
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": name,
+                        "content": result
+                    })
+            else:
+                final_result = msg.content or "Task completed without text output."
+                break
         
-        # Producer Execution
-        producer_response = litellm.completion(
-            model=settings.llm.producer_model,
-            messages=[
-                {"role": "system", "content": "You are the Producer agent. Generate a goal and execute it."},
-                {"role": "user", "content": f"Context: {context_str}\n\nWhat is your goal?"}
-            ]
-        )
-        self.cost_tracker.record_usage(producer_response, "producer", loop_id)
-        result = producer_response.choices[0].message.content
-
-        # 3. Criticism (Critic logic)
+        # 3. Criticism
+        critic_sys = self.templates.load("critic_system", "Evaluate the result.")
         critic_response = litellm.completion(
             model=settings.llm.critic_model,
             messages=[
-                {"role": "system", "content": "You are the Critic agent. Evaluate the following result only. Do NOT look at the producer's thought process."},
-                {"role": "user", "content": f"Result to evaluate: {result}"}
+                {"role": "system", "content": critic_sys},
+                {"role": "user", "content": f"Result to evaluate: {final_result}"}
             ]
         )
         self.cost_tracker.record_usage(critic_response, "critic", loop_id)
         evaluation = critic_response.choices[0].message.content
+        log.info(f"Critic Evaluation: {evaluation[:100]}...")
 
         # 4. Save to Memory
         self.storage.sqlite.save_loop({
             "id": loop_id,
-            "goal": initial_intent, # Placeholder or extracted goal
+            "goal": goal,
             "status": "completed",
-            "score": 0.8, # Placeholder
-            "cost_usd": litellm.completion_cost(producer_response) + litellm.completion_cost(critic_response)
+            "score": 0.8, # TODO: Parse from critic output
+            "cost_usd": 0.0 # TODO: Sum from AuditLog
         })
-        self.storage.vector.embed_and_store(result, {"loop_id": loop_id, "type": "result"})
-
-        log.info(f"Loop {loop_id} finished. Evaluation: {evaluation[:50]}...")
+        self.storage.vector.embed_and_store(final_result, {"loop_id": loop_id, "goal": goal})
+        
+        self.storage.sandbox.stop()
+        log.info(f"Loop {loop_id} finished.")

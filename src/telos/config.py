@@ -15,13 +15,11 @@ if not CONFIG_PATH.exists():
     CONFIG_PATH = LOCAL_CONFIG
 
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
+TEMPLATES_DIR = PROJECT_ROOT / "templates"
 LOG_FILE = TELOS_HOME / "agent.log"
 PID_FILE = TELOS_HOME / "telos.pid"
 
-class SecretSettings(BaseModel):
-    openai_api_key: Optional[str] = Field(default=None, description="OpenAI API Key for embeddings/GPT models")
-    gemini_api_key: Optional[str] = Field(default=None, description="Gemini API Key")
-    anthropic_api_key: Optional[str] = Field(default=None, description="Anthropic API Key")
+# Secrets are now loaded via environment variables only
 
 class LLMSettings(BaseModel):
     model: str = Field(default="gemini/gemini-2.0-flash", description="Default model (fallback)")
@@ -46,7 +44,6 @@ class LoggingSettings(BaseModel):
     level: str = Field(default="INFO", description="Console log level (DEBUG, INFO, WARNING, ERROR)")
 
 class Settings(BaseModel):
-    secrets: SecretSettings = Field(default_factory=SecretSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
@@ -68,7 +65,7 @@ class Settings(BaseModel):
         # Load from data
         settings = cls(**data)
         
-        # Environment Variable Overrides (Legacy & Convenience)
+        # Environment Variable Overrides
         if env_model := os.getenv("TELOS_MODEL"):
             settings.llm.model = env_model
         if env_embed := os.getenv("TELOS_EMBEDDING_MODEL"):
@@ -76,14 +73,7 @@ class Settings(BaseModel):
         if env_qdrant := os.getenv("QDRANT_URL"):
             settings.memory.qdrant_url = env_qdrant
         
-        # Apply secrets to environment for litellm and other components
-        if settings.secrets.openai_api_key:
-            os.environ["OPENAI_API_KEY"] = settings.secrets.openai_api_key
-        if settings.secrets.gemini_api_key:
-            os.environ["GEMINI_API_KEY"] = settings.secrets.gemini_api_key
-        if settings.secrets.anthropic_api_key:
-            os.environ["ANTHROPIC_API_KEY"] = settings.secrets.anthropic_api_key
-            
+        # API Keys are assumed to be in the environment (loaded via cli.py or .env)
         return settings
 
     def save(self):
@@ -98,9 +88,43 @@ settings = Settings.load()
 MAX_TOKENS_PER_LOOP = settings.llm.max_tokens_per_loop
 DAILY_LOOP_LIMIT = settings.daily_loop_limit
 
-def init_directories():
+def generate_env_example():
+    """Create a .env.example file with common providers."""
+    env_example_path = PROJECT_ROOT / ".env.example"
+    content = """# Telos Environment Variables Template
+# Copy this to .env or .env.local and fill in your keys
+
+# --- Major Providers ---
+GEMINI_API_KEY=
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+
+# --- Other Providers (via litellm) ---
+# MISTRAL_API_KEY=
+# COHERE_API_KEY=
+# AZURE_API_KEY=
+# AZURE_API_BASE=
+
+# --- Local LLMs (Ollama) ---
+# OLLAMA_API_BASE=http://localhost:11434
+
+# --- Infrastructure ---
+# QDRANT_URL=http://localhost:6333
+# TELOS_HOME=~/.telos
+"""
+    if not env_example_path.exists():
+        with open(env_example_path, "w") as f:
+            f.write(content)
+
+def init_directories(force: bool = False):
+    """Initialize Telos home, outputs, and default templates/config."""
     TELOS_HOME.mkdir(parents=True, exist_ok=True)
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-    if not CONFIG_PATH.exists():
+    TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+    
+    generate_env_example()
+    
+    # Save default config if not exists or if forced
+    if force or not CONFIG_PATH.exists():
         settings.save()
 

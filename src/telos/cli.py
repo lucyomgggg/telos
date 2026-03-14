@@ -16,22 +16,28 @@ def cli():
     pass
 
 @cli.command()
-def init():
+@click.option('--force', is_flag=True, help='Overwrite existing configuration files.')
+def init(force):
     """Initialize Telos configuration and directories."""
-    init_directories()
-    click.echo("Initialized Telos directories.")
+    init_directories(force=force)
+    click.echo("✅ Initialized Telos directories and configuration.")
+    click.echo("\n--- Next Steps ---")
+    click.echo("1. API Keys: Copy .env.example to .env and add your API keys.")
+    click.echo("   Example: cp .env.example .env")
+    click.echo("2. Customization: Edit config.yaml or templates/ to customize agent behavior.")
+    click.echo("3. Run: Start the agent with 'telos start --loops 1'")
 
 @cli.command()
 @click.option('--model', help='The LLM model to use (default from config.yaml)')
 @click.option('--loops', default=1, type=int, help='Number of loops to run (default: 1)')
 def start(model, loops):
     """Start the autonomous loop."""
-    from .loop import AgentLoop
+    from .telos_core import AgentLoop
     
-    selected_model = model or settings.llm.model
+    selected_model = model or settings.llm.producer_model
     click.echo(f"Starting Telos loop with model: {selected_model} ({loops} loop(s))...")
-    agent = AgentLoop(model=selected_model, max_loops=loops)
-    agent.start()
+    agent = AgentLoop()
+    agent.start(loops=loops)
 
 @cli.command()
 def stop():
