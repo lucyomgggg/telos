@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from .llm import LLMInterface
 from .config import TELOS_HOME
 from .logger import get_logger
@@ -13,16 +14,16 @@ class CriticAgent:
         
         explicit_rubric_path = rubric_path or self.settings.critic.rubric_path
         self.rubric_path = Path(explicit_rubric_path) if explicit_rubric_path else (TELOS_HOME / "rubric.json")
-        self.llm = LLMInterface(model=self.settings.llm.model)
+        self.llm = LLMInterface(model=self.settings.llm.critic_model)
         self.rubric = self._load_rubric()
 
     def _load_rubric(self) -> dict:
         if not self.rubric_path.exists():
             default_rubric = {
                 "axes": [
-                    {"name": "completeness", "weight": 0.5, "description": "Is the artifact complete and functional as requested?"},
-                    {"name": "coherence", "weight": 0.3, "description": "Does the artifact match the original goal?"},
-                    {"name": "novelty", "weight": 0.2, "description": "Is this a novel approach or just repeating standard boilerplate?"}
+                    {"name": "novelty", "weight": 0.4, "description": "Is this approach/result novel compared to previous iterations?"},
+                    {"name": "completeness", "weight": 0.4, "description": "Is the artifact complete and functional as requested?"},
+                    {"name": "coherence", "weight": 0.2, "description": "Does the artifact match the original goal?"}
                 ]
             }
             self.rubric_path.parent.mkdir(parents=True, exist_ok=True)

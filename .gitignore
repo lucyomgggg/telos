@@ -26,3 +26,6 @@ qdrant_data/
 
 # Project specific
 config.yaml
+Progress.md
+verify_*.py
+test_telos.db

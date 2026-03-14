@@ -1,5 +1,6 @@
 import os
 import uuid
+from datetime import datetime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from qdrant_client import QdrantClient
@@ -59,6 +60,24 @@ class MemoryStore:
             return [r.to_dict() for r in records]
         finally:
             session.close()
+    def get_recent_history(self, limit: int = 20) -> list[dict]:
+        """Fetch the last N goals and their scores for loop context."""
+        session = self.Session()
+        try:
+            records = session.query(LoopRecord).order_by(LoopRecord.created_at.desc()).limit(limit).all()
+            return [{"goal": r.goal, "score": r.score} for r in records][::-1]  # Return in chronological order
+        finally:
+            session.close()
+
+    def get_total_spend(self, since: datetime) -> float:
+        """Calculate total USD spent since a given datetime."""
+        from sqlalchemy import func
+        session = self.Session()
+        try:
+            result = session.query(func.sum(LoopRecord.cost_usd)).filter(LoopRecord.created_at >= since).scalar()
+            return float(result or 0.0)
+        finally:
+            session.close()
 
 
 # --- Vector Store (Qdrant) ---
@@ -81,13 +100,17 @@ class VectorStore:
             log.warning("Qdrant unavailable, vector search disabled: %s", e)
 
     def _ensure_collection(self):
-        collections = [c.name for c in self.client.get_collections().collections]
-        if self.collection_name not in collections:
-            self.client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
-            )
-            log.info("Created Qdrant collection: %s", self.collection_name)
+        try:
+            collections = [c.name for c in self.client.get_collections().collections]
+            if self.collection_name not in collections:
+                self.client.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
+                )
+                log.info("Created Qdrant collection: %s", self.collection_name)
+        except Exception as e:
+            log.warning("Could not ensure Qdrant collection: %s", e)
+            self.available = False
 
     def embed_and_store(self, text: str, metadata: dict = None) -> str:
         """Store semantic meaning of an artifact. Returns point ID or None."""

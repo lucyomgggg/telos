@@ -20,7 +20,8 @@ dependencies = [
     "click>=8.1.0",
     "pyyaml>=6.0",
     "pydantic>=2.5.0",
-    "python-dotenv>=1.0.0"
+    "python-dotenv>=1.0.0",
+    "sentence-transformers>=2.2.0"
 ]
 
 [project.scripts]

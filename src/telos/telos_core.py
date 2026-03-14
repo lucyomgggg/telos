@@ -6,7 +6,7 @@ from typing import List, Optional, Any, Dict
 from pydantic import BaseModel, Field
 import litellm
 from sqlalchemy import func
-from .config import settings, TELOS_HOME
+from .config import settings, TELOS_HOME, PID_FILE
 from .logger import get_logger
 from .memory import MemoryStore, VectorStore
 from .db_models import AuditLog, LoopRecord
@@ -59,6 +59,7 @@ class CostTracker:
         
         session = self.memory_store.Session()
         try:
+            # Update AuditLog
             entry = AuditLog(
                 agent_type=agent_type,
                 model=model,
@@ -67,8 +68,15 @@ class CostTracker:
                 loop_id=loop_id
             )
             session.add(entry)
+            
+            # Update the LoopRecord's aggregate cost if it exists
+            record = session.query(LoopRecord).filter_by(id=loop_id).first()
+            if record:
+                record.cost_usd += cost
+                record.tokens_used += tokens
+            
             session.commit()
-            log.info(f"Recorded cost: ${cost:.6f} for {agent_type} using {model}")
+            log.debug(f"Recorded cost: ${cost:.6f} for {agent_type} using {model}")
         except Exception as e:
             session.rollback()
             log.error(f"Failed to record cost: {e}")
@@ -90,6 +98,14 @@ class CostTracker:
         try:
             today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             count = session.query(func.count(LoopRecord.id)).filter(LoopRecord.created_at >= today).scalar()
+            return int(count or 0)
+        finally:
+            session.close()
+
+    def get_total_loop_count(self) -> int:
+        session = self.memory_store.Session()
+        try:
+            count = session.query(func.count(LoopRecord.id)).scalar()
             return int(count or 0)
         finally:
             session.close()
@@ -128,6 +144,10 @@ class AgentLoop:
         self.daily_limit = settings.daily_loop_limit
         self.monthly_limit = settings.monthly_cost_limit
         self.templates = TemplateLoader()
+        from .critic import CriticAgent
+        from .deduplicator import GoalDeduplicator
+        self.critic_agent = CriticAgent()
+        self.deduplicator = GoalDeduplicator()
 
     def _check_safety(self):
         daily_loops = self.cost_tracker.get_daily_loop_count()
@@ -140,45 +160,101 @@ class AgentLoop:
 
     def _generate_goal(self, initial_intent: str) -> str:
         """Query memory and LLM to decide the next objective."""
-        past_loops = self.storage.sqlite.list_loops(limit=5)
+        history = self.storage.sqlite.get_recent_history(limit=20)
         
-        history_summary = []
-        for loop in past_loops:
-            status = loop['status']
-            score = f"{loop['score']:.2f}" if loop['score'] is not None else "N/A"
-            history_summary.append(f"- Goal: {loop['goal']} | Status: {status} | Score: {score}")
-
-        history_text = "\n".join(history_summary)
+        history_text = "\n".join([f"- Goal: {h['goal']} | Score: {h['score']}" for h in history])
         
         similar = self.storage.vector.search_similar(initial_intent, limit=3)
         similar_text = ""
         if similar:
-            similar_text = "\nPast artifact summaries found in memory:\n" + "\n".join(
-                [f"- {s.get('payload', {})}" for s in similar]
+            similar_text = "\nPast artifact summaries found in vector memory:\n" + "\n".join(
+                [f"- {s.get('payload', {}).get('goal', 'N/A')}" for s in similar]
             )
         
-        system_prompt = self.templates.load("goal_generation_system", "Generate a goal.")
-        user_prompt = f"Intent: {initial_intent}\n\nPast loop history:\n{history_text}{similar_text}\n\nGenerate the next goal:"
+        system_prompt = self.templates.load("goal_generation_system", 
+            "You are the Goal Setting Agent. Generate a concise goal in JSON format: {'goal': '...'}")
+        user_prompt = f"Ambient Intent: {initial_intent}\n\nRecent History (Last 20):\n{history_text}{similar_text}\n\nDecision: Generate the next goal to progress while avoiding immediate redundancy."
         
-        response = litellm.completion(
-            model=settings.llm.producer_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-        self.cost_tracker.record_usage(response, "producer", "pre-loop-id")
-        return response.choices[0].message.content.strip()
+        import json
+        
+        for attempt in range(3):
+            response = litellm.completion(
+                model=settings.llm.producer_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"}
+            )
+            self.cost_tracker.record_usage(response, "goal_gen", "system")
+            
+            try:
+                goal_data = json.loads(response.choices[0].message.content)
+                new_goal = goal_data.get("goal", "Explore and create")
+                
+                past_goals = [h["goal"] for h in history]
+                if self.deduplicator.is_duplicate(new_goal, past_goals):
+                    log.warning(f"Goal duplicate detected: {new_goal}. Retrying...")
+                    user_prompt += f"\n\nWait: The previous proposal '{new_goal}' was too similar to history. Please provide a more distinct next step."
+                    continue
+                
+                return new_goal
+            except Exception as e:
+                log.error(f"Goal parsing failed: {e}")
+                if attempt == 2:
+                    return response.choices[0].message.content.strip()
+        
+        return "Explore the system further."
+
+    def _update_rubric_if_needed(self):
+        """Self-update the rubric every 20 loops based on recent performance."""
+        loop_count = self.cost_tracker.get_total_loop_count()
+        if loop_count > 0 and loop_count % 20 == 0:
+            log.info("Starting periodic rubric self-update...")
+            
+            # Fetch last 20 records for context
+            history = self.storage.sqlite.list_loops(limit=20)
+            history_text = "\n".join([f"- Goal: {h['goal']} | Score: {h['score']} | Reason: {h.get('reasoning', '')}" for h in history])
+            
+            current_rubric = json.dumps(self.critic_agent.rubric)
+            
+            prompt = (
+                f"Currently, the evaluation rubric is:\n{current_rubric}\n\n"
+                f"The last 20 iterations had the following performance:\n{history_text}\n\n"
+                "Based on this, suggest an updated JSON rubric to better drive the agent towards higher quality/novelty."
+            )
+            
+            try:
+                response = litellm.completion(
+                    model=settings.llm.critic_model,
+                    messages=[{"role": "system", "content": "You are a Rubric Optimization Meta-Agent."}, 
+                              {"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"}
+                )
+                new_rubric = json.loads(response.choices[0].message.content)
+                
+                # Save new rubric
+                with open(self.critic_agent.rubric_path, "w") as f:
+                    json.dump(new_rubric, f, indent=4)
+                
+                self.critic_agent.rubric = new_rubric
+                log.info("Rubric successfully updated.")
+            except Exception as e:
+                log.error(f"Rubric update failed: {e}")
 
     def start(self, loops: int = 1, initial_intent: str = "Explore and create"):
         """Run multiple autonomous iterations."""
-        for i in range(loops):
-            log.info(f"--- Global Iteration {i+1}/{loops} ---")
-            try:
-                self.run_iteration(initial_intent)
-            except Exception as e:
-                log.error(f"Iteration failed: {e}")
-                break
+        PID_FILE.write_text(str(os.getpid()))
+        try:
+            for i in range(loops):
+                log.info(f"--- Global Iteration {i+1}/{loops} ---")
+                try:
+                    self.run_iteration(initial_intent)
+                except Exception as e:
+                    log.error(f"Iteration failed: {e}")
+                    break
+        finally:
+            PID_FILE.unlink(missing_ok=True)
 
     def run_iteration(self, initial_intent: str = "Explore the system and optimize performance"):
         self._check_safety()
@@ -231,27 +307,21 @@ class AgentLoop:
                 break
         
         # 3. Criticism
-        critic_sys = self.templates.load("critic_system", "Evaluate the result.")
-        critic_response = litellm.completion(
-            model=settings.llm.critic_model,
-            messages=[
-                {"role": "system", "content": critic_sys},
-                {"role": "user", "content": f"Result to evaluate: {final_result}"}
-            ]
-        )
-        self.cost_tracker.record_usage(critic_response, "critic", loop_id)
-        evaluation = critic_response.choices[0].message.content
-        log.info(f"Critic Evaluation: {evaluation[:100]}...")
+        evaluation = self.critic_agent.evaluate(goal, final_result)
+        log.info(f"Critic Evaluation: {evaluation.get('overall_score')} - {evaluation.get('reasoning', '')[:100]}...")
 
         # 4. Save to Memory
         self.storage.sqlite.save_loop({
             "id": loop_id,
             "goal": goal,
             "status": "completed",
-            "score": 0.8, # TODO: Parse from critic output
-            "cost_usd": 0.0 # TODO: Sum from AuditLog
+            "score": evaluation.get("overall_score", 0.0),
+            "score_breakdown": evaluation.get("breakdown", {}),
         })
         self.storage.vector.embed_and_store(final_result, {"loop_id": loop_id, "goal": goal})
         
         self.storage.sandbox.stop()
         log.info(f"Loop {loop_id} finished.")
+        
+        # 5. Rubric Self-Update
+        self._update_rubric_if_needed()

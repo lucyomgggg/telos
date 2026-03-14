@@ -1,0 +1,19 @@
+{
+    "axes": [
+        {
+            "name": "novelty",
+            "weight": 0.4,
+            "description": "Is this approach/result novel compared to previous iterations?"
+        },
+        {
+            "name": "completeness",
+            "weight": 0.4,
+            "description": "Is the artifact complete and functional as requested?"
+        },
+        {
+            "name": "coherence",
+            "weight": 0.2,
+            "description": "Does the artifact match the original goal?"
+        }
+    ]
+}

@@ -56,6 +56,8 @@ class SandboxManager:
                 detach=True,
                 network_mode="bridge",
                 mem_limit="512m",
+                memswap_limit="512m",
+                network_disabled=True,
             )
             log.info("Created and started new container %s", self.container_name)
         return self.container
@@ -108,10 +110,40 @@ class SandboxManager:
         if not self.container:
             self.start()
         
-        exec_result = self.container.exec_run(
-            cmd=["/bin/sh", "-c", command],
-            workdir="/workspace"
-        )
+        import threading
+        
+        result_container = []
+        
+        def run_command():
+            try:
+                exec_res = self.container.exec_run(
+                    cmd=["/bin/sh", "-c", command],
+                    workdir="/workspace"
+                )
+                result_container.append(exec_res)
+            except Exception as e:
+                result_container.append(e)
+
+        thread = threading.Thread(target=run_command)
+        thread.start()
+        thread.join(timeout=timeout)
+
+        if thread.is_alive():
+            log.warning("Command timed out after %ds: %s", timeout, command[:80])
+            # Attempt to kill the process inside the container if possible
+            # For simplicity in this runtime, we might just return timeout
+            # and let the next command handle it, or stop the container.
+            return {
+                "exit_code": 124,
+                "output": f"Error: Command timed out after {timeout} seconds."
+            }
+
+        exec_result = result_container[0]
+        if isinstance(exec_result, Exception):
+            return {
+                "exit_code": 1,
+                "output": str(exec_result)
+            }
         
         return {
             "exit_code": exec_result.exit_code,
