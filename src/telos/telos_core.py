@@ -1,4 +1,5 @@
 import os
+import json
 import uuid
 from datetime import datetime, timezone
 from abc import ABC, abstractmethod
@@ -172,37 +173,43 @@ class AgentLoop:
             )
         
         system_prompt = self.templates.load("goal_generation_system", 
-            "You are the Goal Setting Agent. Generate a concise goal in JSON format: {'goal': '...'}")
+            "You are the Goal Setting Agent. Generate a concise goal in JSON format. Output must be a JSON object like: {'goal': '...'}")
         user_prompt = f"Ambient Intent: {initial_intent}\n\nRecent History (Last 20):\n{history_text}{similar_text}\n\nDecision: Generate the next goal to progress while avoiding immediate redundancy."
         
         import json
+        import time
         
-        for attempt in range(3):
-            response = litellm.completion(
-                model=settings.llm.producer_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_format={"type": "json_object"}
-            )
-            self.cost_tracker.record_usage(response, "goal_gen", "system")
-            
+        for attempt in range(5):
             try:
+                response = litellm.completion(
+                    model=settings.llm.producer_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    response_format={"type": "json_object"}
+                )
+                self.cost_tracker.record_usage(response, "goal_gen", "system")
+                
                 goal_data = json.loads(response.choices[0].message.content)
                 new_goal = goal_data.get("goal", "Explore and create")
                 
                 past_goals = [h["goal"] for h in history]
                 if self.deduplicator.is_duplicate(new_goal, past_goals):
-                    log.warning(f"Goal duplicate detected: {new_goal}. Retrying...")
+                    log.warning(f"Goal duplicate detected: {new_goal}. Retrying with refinement...")
                     user_prompt += f"\n\nWait: The previous proposal '{new_goal}' was too similar to history. Please provide a more distinct next step."
                     continue
                 
                 return new_goal
+            except (litellm.RateLimitError, litellm.ServiceUnavailableError) as e:
+                wait_time = (attempt + 1) * 10
+                error_type = "Rate limit" if isinstance(e, litellm.RateLimitError) else "Service unavailable (503)"
+                log.warning(f"{error_type} during goal generation. Waiting {wait_time}s... (Attempt {attempt+1}/5)")
+                time.sleep(wait_time)
             except Exception as e:
-                log.error(f"Goal parsing failed: {e}")
-                if attempt == 2:
-                    return response.choices[0].message.content.strip()
+                log.error(f"Goal generation failed: {e}")
+                if attempt == 4:
+                    return "Explore the system further."
         
         return "Explore the system further."
 
@@ -221,7 +228,8 @@ class AgentLoop:
             prompt = (
                 f"Currently, the evaluation rubric is:\n{current_rubric}\n\n"
                 f"The last 20 iterations had the following performance:\n{history_text}\n\n"
-                "Based on this, suggest an updated JSON rubric to better drive the agent towards higher quality/novelty."
+                "Based on this, suggest an updated JSON rubric to better drive the agent towards higher quality/novelty. "
+                "Your response must be a valid JSON object."
             )
             
             try:
@@ -263,65 +271,135 @@ class AgentLoop:
         goal = self._generate_goal(initial_intent)
         loop_id = str(uuid.uuid4())
         log.info(f"Starting loop {loop_id} with goal: {goal}")
-        
-        # 2. Execution Phase (Multi-step Tool Calling)
-        self.storage.sandbox.start()
-        messages = [{"role": "user", "content": f"Achieve the following goal: {goal}"}]
-        system_prompt = self.templates.load("producer_system", "Execute the goal.")
-        tools = [t.definition for t in self.storage.tool_registry.values()]
 
-        final_result = ""
-        for step in range(10): # Max 10 steps
-            response = litellm.completion(
-                model=settings.llm.producer_model,
-                messages=[{"role": "system", "content": system_prompt}] + messages,
-                tools=tools,
-                tool_choice="auto"
-            )
-            self.cost_tracker.record_usage(response, "producer", loop_id)
-            
-            msg = response.choices[0].message
-            messages.append(msg)
-
-            if msg.tool_calls:
-                for tool_call in msg.tool_calls:
-                    import json
-                    name = tool_call.function.name
-                    args = json.loads(tool_call.function.arguments)
-                    log.info(f"[Tool] {name}({args})")
-                    
-                    tool = self.storage.tool_registry.get(name)
-                    if tool:
-                        result = tool.execute(args)
-                    else:
-                        result = f"Error: Tool {name} not found."
-                    
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": name,
-                        "content": result
-                    })
-            else:
-                final_result = msg.content or "Task completed without text output."
-                break
-        
-        # 3. Criticism
-        evaluation = self.critic_agent.evaluate(goal, final_result)
-        log.info(f"Critic Evaluation: {evaluation.get('overall_score')} - {evaluation.get('reasoning', '')[:100]}...")
-
-        # 4. Save to Memory
+        # Initial save as 'running'
         self.storage.sqlite.save_loop({
             "id": loop_id,
             "goal": goal,
-            "status": "completed",
-            "score": evaluation.get("overall_score", 0.0),
-            "score_breakdown": evaluation.get("breakdown", {}),
+            "status": "running"
         })
-        self.storage.vector.embed_and_store(final_result, {"loop_id": loop_id, "goal": goal})
         
-        self.storage.sandbox.stop()
-        log.info(f"Loop {loop_id} finished.")
+        try:
+            # 2. Execution Phase (Multi-step Tool Calling)
+            self.storage.sandbox.start()
+            messages = [{"role": "user", "content": f"Achieve the following goal: {goal}"}]
+            system_prompt = self.templates.load("producer_system", "Execute the goal.")
+            tools = [t.definition for t in self.storage.tool_registry.values()]
+
+            final_result = ""
+            import time
+            for step in range(10): # Max 10 steps
+                response = None
+                for attempt in range(5):
+                    try:
+                        response = litellm.completion(
+                            model=settings.llm.producer_model,
+                            messages=[{"role": "system", "content": system_prompt}] + messages,
+                            tools=tools,
+                            tool_choice="auto"
+                        )
+                        break
+                    except (litellm.RateLimitError, litellm.ServiceUnavailableError) as e:
+                        wait_time = (attempt + 1) * 10
+                        error_type = "Rate limit" if isinstance(e, litellm.RateLimitError) else "Service unavailable (503)"
+                        log.warning(f"{error_type} during execution. Waiting {wait_time}s... (Attempt {attempt+1}/5)")
+                        time.sleep(wait_time)
+                
+                if not response:
+                    raise RuntimeError("Failed to get response after API retries.")
+
+                self.cost_tracker.record_usage(response, "producer", loop_id)
+                
+                msg = response.choices[0].message
+                messages.append(msg)
+
+                if msg.tool_calls:
+                    for tool_call in msg.tool_calls:
+                        import json
+                        name = tool_call.function.name
+                        args = json.loads(tool_call.function.arguments)
+                        
+                        # Truncate long arguments for cleaner terminal
+                        args_str = str(args)
+                        if len(args_str) > 100:
+                            args_str = args_str[:100] + "..."
+                        log.info(f"[Tool] {name}({args_str})")
+                        
+                        tool = self.storage.tool_registry.get(name)
+                        if tool:
+                            result = tool.execute(args)
+                        else:
+                            result = f"Error: Tool {name} not found."
+                        
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": name,
+                            "content": result
+                        })
+                else:
+                    final_result = msg.content or "Task completed without text output."
+                    break
+            
+            # 3. Criticism
+            evaluation = self.critic_agent.evaluate(goal, final_result)
+            log.info(f"Critic Evaluation: {evaluation.get('overall_score')} - {evaluation.get('reasoning', '')[:100]}...")
+
+            # 4. Save to Memory
+            loop_data = {
+                "id": loop_id,
+                "goal": goal,
+                "status": "completed",
+                "score": evaluation.get("overall_score", 0.0),
+                "score_breakdown": evaluation.get("breakdown", {}),
+                "result": final_result,
+                "messages": messages # Save trace
+            }
+            self.storage.sqlite.save_loop(loop_data)
+            self.storage.vector.embed_and_store(final_result, {"loop_id": loop_id, "goal": goal})
+            return loop_data
+
+        except Exception as e:
+            log.error(f"Loop {loop_id} failed: {e}")
+            self.storage.sqlite.save_loop({
+                "id": loop_id,
+                "goal": goal,
+                "status": "failed",
+                "error": str(e)
+            })
+            raise
+        finally:
+            self.storage.sandbox.stop()
+            log.info(f"Loop {loop_id} finished.")
+            self._update_rubric_if_needed()
+
+    def explain_loop(self, loop_id: str) -> str:
+        """Generate a human-readable explanation of what happened in a specific loop."""
+        loop = self.storage.sqlite.get_loop(loop_id)
+        if not loop:
+            return f"Loop {loop_id} not found."
         
-        # 5. Rubric Self-Update
-        self._update_rubric_if_needed()
+        messages = loop.get("messages")
+        goal = loop.get("goal")
+        result = loop.get("result")
+        
+        if not messages:
+            return f"No trace available for Loop {loop_id}.\nGoal: {goal}\nResult: {result}"
+        
+        prompt = (
+            f"Please provide a concise narrative explanation of what happened during this autonomous loop.\n"
+            f"Goal: {goal}\n\n"
+            f"Interaction Trace:\n{json.dumps(messages, indent=2)}\n\n"
+            f"Final Result: {result}\n\n"
+            "Explain the steps taken, any tools used, and the eventual outcome in a professional yet friendly tone."
+        )
+        
+        try:
+            response = litellm.completion(
+                model=settings.llm.critic_model, # Use critic model for explanation
+                messages=[{"role": "system", "content": "You are a Technical Reporter for the Telos system."}, 
+                          {"role": "user", "content": prompt}]
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"Failed to generate explanation: {e}"

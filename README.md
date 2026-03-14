@@ -38,9 +38,13 @@ An autonomous quality-assurance layer that evaluates the agent's output against 
 ## 🛠️ Getting Started
 
 1. **Initialize**: `telos init`
-2. **Configure**: Edit `config.yaml` in the project root to add your `OPENAI_API_KEY` or `GEMINI_API_KEY`.
-3. **Run**: `telos start --loops 5`
-4. **Monitor**: `telos status` and `telos logs -f`
+2. **Configure**: Edit `config.yaml`. (Gemini 2.0 Flash Lite & Local Embeddings are defaults).
+3. **Run**: `telos start --loops 1`
+4. **Inspect Results**:
+    - `telos show <LOOP_ID>`: See the detailed outcome of a specific loop.
+    - `telos summary`: Generate an execution report (`SUMMARY.md`).
+    - `telos status`: Check the overall progress.
+5. **Logs**: `telos logs -f`
 
 ---
 *Telos is a research-oriented project aimed at pushing the boundaries of AI autonomy.*

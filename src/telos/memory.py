@@ -84,46 +84,72 @@ class MemoryStore:
 class VectorStore:
     def __init__(self, collection_name: str = "telos_artifacts"):
         self.collection_name = collection_name
-        self.vector_size = 1536
         self.available = False
         self.client = None
+        self._local_model = None
 
         from .config import settings
         self.settings = settings.load()
+        self.embedding_model = self.settings.memory.embedding_model
+        
+        # Determine vector size and local support
+        if self.embedding_model == "all-MiniLM-L6-v2":
+            self.vector_size = 384
+        else:
+            self.vector_size = 1536 # Default for OpenAI/Gemini/Haiku
+            
         qdrant_url = self.settings.memory.qdrant_url
         try:
             self.client = QdrantClient(url=qdrant_url, timeout=5)
             self._ensure_collection()
             self.available = True
-            log.info("Qdrant connected at %s", qdrant_url)
+            log.info("Qdrant connected at %s with vector_size=%d", qdrant_url, self.vector_size)
         except Exception as e:
             log.warning("Qdrant unavailable, vector search disabled: %s", e)
 
     def _ensure_collection(self):
         try:
+            # Check if collection exists and has the correct vector size
             collections = [c.name for c in self.client.get_collections().collections]
+            if self.collection_name in collections:
+                info = self.client.get_collection(self.collection_name)
+                # If vector size mismatch, we might need to recreate or use a different collection
+                # For now, let's just log it. In a real system we might version the collection.
+                existing_size = info.config.params.vectors.size
+                if existing_size != self.vector_size:
+                    log.warning("Collection vector size mismatch: existing=%d, requested=%d. Recreating...", existing_size, self.vector_size)
+                    self.client.delete_collection(self.collection_name)
+                    collections.remove(self.collection_name)
+
             if self.collection_name not in collections:
                 self.client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
                 )
-                log.info("Created Qdrant collection: %s", self.collection_name)
+                log.info("Created Qdrant collection: %s (size=%d)", self.collection_name, self.vector_size)
         except Exception as e:
             log.warning("Could not ensure Qdrant collection: %s", e)
             self.available = False
+
+    def _get_embedding(self, text: str) -> list[float]:
+        if self.embedding_model == "all-MiniLM-L6-v2":
+            if not self._local_model:
+                from sentence_transformers import SentenceTransformer
+                self._local_model = SentenceTransformer(self.embedding_model)
+            return self._local_model.encode(text).tolist()
+        else:
+            from litellm import embedding
+            response = embedding(model=self.embedding_model, input=[text])
+            return response.data[0]['embedding']
 
     def embed_and_store(self, text: str, metadata: dict = None) -> str:
         """Store semantic meaning of an artifact. Returns point ID or None."""
         if not self.available:
             return None
 
-        from litellm import embedding
-        
         point_id = str(uuid.uuid4())
         try:
-            model = settings.llm.embedding_model
-            response = embedding(model=model, input=[text])
-            vectors = response.data[0]['embedding']
+            vectors = self._get_embedding(text)
             
             self.client.upsert(
                 collection_name=self.collection_name,
@@ -141,19 +167,16 @@ class VectorStore:
         """Find past artifacts matching the query."""
         if not self.available:
             return []
-
-        from litellm import embedding
         
         try:
-            model = settings.llm.embedding_model
-            response = embedding(model=model, input=[query])
-            query_vector = response.data[0]['embedding']
+            query_vector = self._get_embedding(query)
             
-            results = self.client.search(
+            # Using query_points instead of search for qdrant-client v1.17.1+
+            results = self.client.query_points(
                 collection_name=self.collection_name,
-                query_vector=query_vector,
+                query=query_vector,
                 limit=limit
-            )
+            ).points
             return [{"id": r.id, "score": r.score, "payload": r.payload} for r in results]
         except Exception as e:
             log.warning("Failed to search vector store: %s", e)

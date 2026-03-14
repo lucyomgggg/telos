@@ -22,7 +22,7 @@ venv/
 # Telos runtime
 *.db
 workspace/
-qdrant_data/
+data/
 
 # Project specific
 config.yaml

@@ -37,4 +37,21 @@ def get_logger(name: str) -> logging.Logger:
     except (PermissionError, OSError):
         logger.warning("Could not create log file at %s", LOG_FILE)
 
+    # Suppress verbose third-party logs
+    logging.getLogger("litellm").setLevel(logging.WARNING)
+    logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
+    logging.getLogger("docker").setLevel(logging.WARNING)
+    
+    # Silence Transformers load reports
+    import os
+    os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    
+    # Python's default logging for some libraries is too chatty
+    import warnings
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    
     return logger

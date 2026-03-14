@@ -7,7 +7,8 @@ from typing import Optional
 # --- Paths ---
 PROJECT_ROOT = Path.cwd()
 LOCAL_CONFIG = PROJECT_ROOT / "config.yaml"
-TELOS_HOME = Path(os.getenv("TELOS_HOME", Path.home() / ".telos"))
+# Default to project-local data folder
+TELOS_HOME = Path(os.getenv("TELOS_HOME", PROJECT_ROOT / "data"))
 CONFIG_PATH = LOCAL_CONFIG if LOCAL_CONFIG.exists() else (TELOS_HOME / "config.yaml")
 
 # Fallback for creating new config
@@ -25,12 +26,12 @@ class LLMSettings(BaseModel):
     model: str = Field(default="gemini/gemini-2.0-flash", description="Default model (fallback)")
     producer_model: str = Field(default="gemini/gemini-2.0-flash", description="Model for the Producer agent")
     critic_model: str = Field(default="gemini/gemini-1.5-pro", description="Model for the Critic agent")
-    embedding_model: str = Field(default="text-embedding-3-small", description="Model used for semantic memory")
     max_tokens_per_loop: int = Field(default=100000, description="Token limit per loop iteration")
 
 class MemorySettings(BaseModel):
     qdrant_url: str = Field(default="http://localhost:6333", description="Qdrant vector store URL")
     collection_name: str = Field(default="telos_artifacts", description="Name of the Qdrant collection")
+    embedding_model: str = Field(default="gemini/embedding-001", description="Model used for semantic memory")
 
 class SandboxSettings(BaseModel):
     image: str = Field(default="telos-sandbox:latest", description="Docker image for the sandbox")
@@ -69,7 +70,7 @@ class Settings(BaseModel):
         if env_model := os.getenv("TELOS_MODEL"):
             settings.llm.model = env_model
         if env_embed := os.getenv("TELOS_EMBEDDING_MODEL"):
-            settings.llm.embedding_model = env_embed
+            settings.memory.embedding_model = env_embed
         if env_qdrant := os.getenv("QDRANT_URL"):
             settings.memory.qdrant_url = env_qdrant
         

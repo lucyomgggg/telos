@@ -43,7 +43,7 @@ class CriticAgent:
         system_prompt = (
             "You are an objective Critic Agent. Your task is to evaluate the provided artifact based on the rubric.\n"
             "You MUST output your evaluation in valid JSON format ONLY.\n"
-            "Format:\n"
+            "The response must be a JSON object with the following format:\n"
             "{\n"
             '  "scores": {"completeness": 0.8, "coherence": 0.9, "novelty": 0.5},\n'
             '  "reasoning": "Brief explanation of scores."\n'
@@ -66,7 +66,20 @@ class CriticAgent:
             )
             
             result_text = response.choices[0].message.content
-            evaluation = json.loads(result_text)
+            if not result_text:
+                raise ValueError("Empty response from LLM")
+            
+            # strip markdown blocks if present
+            if "```json" in result_text:
+                result_text = result_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in result_text:
+                result_text = result_text.split("```")[1].split("```")[0].strip()
+
+            try:
+                evaluation = json.loads(result_text)
+            except json.JSONDecodeError:
+                log.error("Failed to parse Critic JSON. Raw text: %s", result_text)
+                raise
             
             # Calculate weighted average
             overall_score = 0.0

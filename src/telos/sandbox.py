@@ -57,7 +57,7 @@ class SandboxManager:
                 network_mode="bridge",
                 mem_limit="512m",
                 memswap_limit="512m",
-                network_disabled=True,
+                network_disabled=False,
             )
             log.info("Created and started new container %s", self.container_name)
         return self.container

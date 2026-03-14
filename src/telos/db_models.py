@@ -17,6 +17,8 @@ class LoopRecord(Base):
     cost_usd = Column(Float, default=0.0)
     status = Column(String, default="running")         # running, completed, failed, timeout
     error = Column(String, nullable=True)
+    result = Column(String, nullable=True)            # The final text artifact
+    messages = Column(JSON, nullable=True)            # Full interaction trace (for 'explain')
 
     def to_dict(self):
         return {
@@ -29,7 +31,8 @@ class LoopRecord(Base):
             "tokens_used": self.tokens_used,
             "cost_usd": self.cost_usd,
             "status": self.status,
-            "error": self.error
+            "error": self.error,
+            "result": self.result
         }
 
 class AuditLog(Base):
