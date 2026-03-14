@@ -20,23 +20,24 @@ TEMPLATES_DIR = PROJECT_ROOT / "templates"
 LOG_FILE = TELOS_HOME / "agent.log"
 PID_FILE = TELOS_HOME / "telos.pid"
 
-# Secrets are now loaded via environment variables only
-
 class LLMSettings(BaseModel):
-    model: str = Field(default="gemini/gemini-2.0-flash", description="Default model (fallback)")
-    producer_model: str = Field(default="gemini/gemini-2.0-flash", description="Model for the Producer agent")
-    critic_model: str = Field(default="gemini/gemini-1.5-pro", description="Model for the Critic agent")
+    model: str = Field(default="gemini/gemini-flash-latest", description="Default model (fallback)")
+    producer_model: str = Field(default="gemini/gemini-flash-latest", description="Model for the Producer agent")
+    critic_model: str = Field(default="gemini/gemini-flash-latest", description="Model for the Critic agent")
     max_tokens_per_loop: int = Field(default=100000, description="Token limit per loop iteration")
 
 class MemorySettings(BaseModel):
     qdrant_url: str = Field(default="http://localhost:6333", description="Qdrant vector store URL")
     collection_name: str = Field(default="telos_artifacts", description="Name of the Qdrant collection")
     embedding_model: str = Field(default="gemini/embedding-001", description="Model used for semantic memory")
+    workspace_path: str = Field(default="workspace", description="Path to the agent workspace")
 
 class SandboxSettings(BaseModel):
     image: str = Field(default="telos-sandbox:latest", description="Docker image for the sandbox")
     container_name: str = Field(default="telos-agent-sandbox", description="Name for the sandbox container")
     use_docker: bool = Field(default=True, description="Whether to use Docker or local execution")
+    memory_limit: str = Field(default="512m", description="Docker memory limit (e.g., 512m, 1g)")
+    timeout: int = Field(default=300, description="Hard timeout for sandbox commands in seconds")
 
 class CriticSettings(BaseModel):
     rubric_path: Optional[str] = Field(default=None, description="Path to custom evaluation rubric JSON")
@@ -52,6 +53,7 @@ class Settings(BaseModel):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     daily_loop_limit: int = Field(default=10, description="Max loops per day")
     monthly_cost_limit: float = Field(default=50.0, description="Max USD budget per month")
+    rate_limit_delay: float = Field(default=6.0, description="Seconds to wait between LLM calls")
 
     @classmethod
     def load(cls) -> "Settings":
@@ -63,18 +65,20 @@ class Settings(BaseModel):
             except Exception:
                 pass
         
-        # Load from data
         settings = cls(**data)
         
         # Environment Variable Overrides
-        if env_model := os.getenv("TELOS_MODEL"):
-            settings.llm.model = env_model
+        if env_model := os.getenv("TELOS_PRODUCER_MODEL"):
+            settings.llm.producer_model = env_model
+        if env_critic_model := os.getenv("TELOS_CRITIC_MODEL"):
+            settings.llm.critic_model = env_critic_model
         if env_embed := os.getenv("TELOS_EMBEDDING_MODEL"):
             settings.memory.embedding_model = env_embed
         if env_qdrant := os.getenv("QDRANT_URL"):
             settings.memory.qdrant_url = env_qdrant
+        if env_docker := os.getenv("TELOS_USE_DOCKER"):
+            settings.sandbox.use_docker = env_docker.lower() == "true"
         
-        # API Keys are assumed to be in the environment (loaded via cli.py or .env)
         return settings
 
     def save(self):
@@ -84,10 +88,6 @@ class Settings(BaseModel):
 
 # Global settings instance
 settings = Settings.load()
-
-# Legacy constants for compatibility (can be refactored out later)
-MAX_TOKENS_PER_LOOP = settings.llm.max_tokens_per_loop
-DAILY_LOOP_LIMIT = settings.daily_loop_limit
 
 def generate_env_example():
     """Create a .env.example file with common providers."""
@@ -100,18 +100,18 @@ GEMINI_API_KEY=
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 
-# --- Other Providers (via litellm) ---
-# MISTRAL_API_KEY=
-# COHERE_API_KEY=
-# AZURE_API_KEY=
-# AZURE_API_BASE=
+# --- Other Secrets ---
+HF_TOKEN=
 
-# --- Local LLMs (Ollama) ---
-# OLLAMA_API_BASE=http://localhost:11434
+# --- Overrides ---
+# TELOS_PRODUCER_MODEL=gemini/gemini-2.0-flash-lite
+# TELOS_CRITIC_MODEL=gemini/gemini-1.5-pro
+# TELOS_EMBEDDING_MODEL=all-MiniLM-L6-v2
+# TELOS_USE_DOCKER=true
 
 # --- Infrastructure ---
 # QDRANT_URL=http://localhost:6333
-# TELOS_HOME=~/.telos
+# TELOS_HOME=./data
 """
     if not env_example_path.exists():
         with open(env_example_path, "w") as f:

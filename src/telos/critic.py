@@ -54,14 +54,9 @@ class CriticAgent:
         user_prompt = f"Goal:\n{goal}\n\nArtifact Content:\n{artifact_content}"
         
         try:
-            from litellm import completion
-            
-            response = completion(
-                model=self.llm.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
+            response = self.llm.chat(
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
                 response_format={"type": "json_object"}
             )
             
@@ -75,11 +70,7 @@ class CriticAgent:
             elif "```" in result_text:
                 result_text = result_text.split("```")[1].split("```")[0].strip()
 
-            try:
-                evaluation = json.loads(result_text)
-            except json.JSONDecodeError:
-                log.error("Failed to parse Critic JSON. Raw text: %s", result_text)
-                raise
+            evaluation = json.loads(result_text)
             
             # Calculate weighted average
             overall_score = 0.0

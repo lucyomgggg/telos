@@ -75,29 +75,48 @@ class LLMInterface:
             }
         ]
 
-    def chat(self, messages: List[Dict[str, Any]], system: str = "", max_retries: int = 3) -> Any:
-        """Send a chat request to the LLM with tool definitions and retry logic."""
+    def chat(self, messages: List[Dict[str, Any]], system: str = "", max_retries: int = 5, **kwargs) -> Any:
+        """Send a chat request to the LLM with tool definitions and robust retry logic."""
         formatted_messages = []
         if system:
             formatted_messages.append({"role": "system", "content": system})
         formatted_messages.extend(messages)
+
+        # Default tools if not provided in kwargs and not using json_object response format
+        # Gemini does not support both simultaneously
+        is_json_mode = kwargs.get("response_format", {}).get("type") == "json_object"
+        
+        if "tools" not in kwargs and not is_json_mode:
+            kwargs["tools"] = self.tools
+        if "tool_choice" not in kwargs and kwargs.get("tools"):
+            kwargs["tool_choice"] = "auto"
 
         for attempt in range(1, max_retries + 1):
             try:
                 response = completion(
                     model=self.model,
                     messages=formatted_messages,
-                    tools=self.tools,
+                    **kwargs
                 )
                 return response
             except Exception as e:
                 error_str = str(e).lower()
-                is_retryable = any(kw in error_str for kw in ["rate_limit", "timeout", "429", "503", "500"])
+                # 429 is the key rate limit error
+                is_rate_limit = any(kw in error_str for kw in ["rate_limit", "429"])
+                is_retryable = is_rate_limit or any(kw in error_str for kw in ["timeout", "503", "500"])
                 
                 if is_retryable and attempt < max_retries:
-                    wait = 2 ** attempt  # exponential backoff: 2, 4, 8 seconds
-                    log.warning("LLM call failed (attempt %d/%d), retrying in %ds: %s", 
-                               attempt, max_retries, wait, e)
+                    # Exponential backoff: 5s, 10s, 20s, 40s, 80s
+                    # Gemini free tier has a 10 RPM limit, so we need significant backoff
+                    wait = (2 ** (attempt - 1)) * 5
+                    if is_rate_limit:
+                        # Add jitter and ensure substantial wait for 429
+                        wait += 10
+                        log.warning("Rate limit (429) hit (attempt %d/%d), waiting %ds: %s", 
+                                   attempt, max_retries, wait, e)
+                    else:
+                        log.warning("LLM call failed (attempt %d/%d), retrying in %ds: %s", 
+                                   attempt, max_retries, wait, e)
                     time.sleep(wait)
                 else:
                     log.error("LLM call failed permanently: %s", e)

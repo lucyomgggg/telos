@@ -19,80 +19,100 @@ Traditional agents follow a linear script provided by a human. **Telos** flips t
 
 ---
 
-## 2. System Architecture
+## 2. Project Anatomy (Directory Map)
 
-Telos is built on **Five Pillars** that interact in a continuous cycle:
+| Path | Purpose | Key Files |
+|:---|:---|:---|
+| `src/telos/` | Core Source Code | `telos_core.py`, `memory.py`, `critic.py` |
+| `data/` | Persistent System State | `telos.db`, `agent.log`, `qdrant/` |
+| `templates/` | Agent Personality & Logic | `producer_system.txt`, `critic_system.txt` |
+| `workspace/` | Sandbox Shared Folder | (Target for AI-generated code/files) |
+| `scripts/` | Utility & Setup Scripts | `init_v2.sh`, `run_sandbox.sh` |
+| `tests/` | System Verification | `test_core.py`, `test_memory.py` |
+| `config.yaml` | Service & Model Settings | (Found in project root) |
+
+---
+
+## 3. System Architecture & The Orchestrator
+
+Telos is built on **Five Pillars** that interact via the `AgentLoop` state machine:
 
 ```mermaid
 graph TD
     subgraph "Reasoning Layer"
         Producer["Producer Agent (Flash-Lite/Pro)"]
         Critic["Critic Agent (Gemini Pro/Critic)"]
-        Deduplicator["Goal Deduplicator (Local NLP)"]
     end
 
     subgraph "Execution Layer"
         Loop["AgentLoop (Orchestrator)"]
-        Sandbox["Docker Sandbox (Resource Limited)"]
+        Sandbox["Docker Sandbox (Hardened)"]
     end
 
     subgraph "Memory Layer"
         SQLite["Structured Metadata (SQLite)"]
-        Qdrant["Semantic Memory (Local Vector Store)"]
+        Qdrant["Semantic Memory (Vector Store)"]
     end
 
     Loop -->|1. Generate Goal| Producer
-    Producer -->|2. Refine| Deduplicator
-    Deduplicator -->|3. Valid Goal| Loop
-    Loop -->|4. Execute Tool Calls| Sandbox
-    Sandbox -->|5. Raw Output| Loop
-    Loop -->|6. Evaluate| Critic
-    Critic -->|7. Score & Feedback| Loop
-    Loop -->|8. Store Metadata| SQLite
-    Loop -->|9. Store Meaning| Qdrant
-    Qdrant -.->|Context/History| Loop
+    Producer -->|2. Goal Definition| Loop
+    Loop -->|3. Tool Calls| Sandbox
+    Sandbox -->|4. Tool Results| Loop
+    Loop -->|5. Final Result| Critic
+    Critic -->|6. Score & Feedback| Loop
+    Loop -->|7. Audit & Storage| SQLite
+    Loop -->|8. Embedding| Qdrant
 ```
 
-### 🏗️ The Pillars Explained
+### 🏗️ The Execution Flow (`AgentLoop.run_iteration`)
+1.  **Goal Generation**: The system analyzes recent history (SQLite) and semantic context (Qdrant) to generate a JSON-formatted goal.
+    - **Deduplication**: If a proposed goal is too similar to past goals, it is automatically refined to ensure novelty.
+2.  **Multi-Step Execution**: The Producer agent interacts with the sandbox through a tool-calling loop (max 10 steps).
+    -   **Tools**: `execute_command` (terminal), `write_file`, `read_file`.
+3.  **Strict Evaluation**: The Critic agent receives ONLY the final goal and the external artifact. It scores the work based on a weighted rubric.
+---
 
-1.  **Orchestrator (`AgentLoop`)**: The state machine. It handles retries, rate-limiting, and ensures the system remains within the budget/complexity limits.
-2.  **Sandbox (`SandboxManager`)**: A hardened Docker container.
-    - **Resource Hardening**: 512MB RAM, 1 CPU, 300s timeout.
-    - **Isolation**: Limited network access and temporary filesystem.
-3.  **Memory Store**:
-    - **SQLite**: The "Cold Storage" for audit logs, costs, and scores.
-    - **Qdrant**: The "Deep Learning" layer. Uses **local** `all-MiniLM-L6-v2` embeddings (zero cost) to retrieve similar past goals and outcomes.
-4.  **Critic Agent**: The "Strict Teacher." It evaluates work based on:
-    - **Completeness**: Did the script actually run and solve the task?
-    - **Novelty**: Is this a fresh step or just a repetition?
-    - **Coherence**: Does it serve the original Ambient Intent?
-5.  **Intelligence Interface**: Powered by `litellm`. It supports Gemini, OpenAI, and Anthropics, allowing for redundant fallbacks.
+## 4. Memory & Persistence
+
+### 🗄️ Structured Memory (SQLite)
+Stored in `data/telos.db`.
+-   **`loops` table**: Stores every iteration's goal, result, interaction trace, score breakdown, and cost.
+-   **`audit_log` table**: Atomic token usage and USD cost tracking.
+
+### 🧠 Semantic Memory (Qdrant)
+-   **Embeddings**: Uses `all-MiniLM-L6-v2` (local) or `gemini/embedding-001`.
+-   **Workspace**: The local agent workspace path is now configurable via `memory.workspace_path`.
 
 ---
 
-## 3. Persistent Data & Workspace
+## 5. Configuration & Safety
 
-All critical system data is stored locally in the `data/` directory for total portability:
+### ⚙️ `config.yaml` Core Settings
+- `llm`: Define models for `producer` and `critic`.
+- `sandbox`: Configurable `memory_limit` (e.g., `512m`) and `timeout` (seconds).
+- `daily_loop_limit`: Hard stop for autonomous runs.
+- `monthly_cost_limit`: USD budget per month.
 
--   `data/telos.db`: SQLite database (History & Metrics).
--   `data/agent.log`: Full activity stream.
--   `data/qdrant/`: Local vector store segments.
--   `workspace/`: The "Playground" where the AI creates files and code.
-
----
-
-## 4. CLI Multi-Tool
-
--   `telos start --loops N`: Begin the autonomous cycle.
--   `telos show`: Instantly view the latest loop's detailed reasoning and score.
--   `telos status`: View a dashboard of recent successes and costs.
--   `telos summary`: Generate an executive Markdown report for human review.
+### 🛡️ Sandbox Isolation
+- **Resource Limits**: Memory and CPU time are strictly enforced at the container level.
+- **Environment Overrides**: All sensitive settings and model choices can be overridden via `.env` or environment variables (e.g., `TELOS_PRODUCER_MODEL`, `HF_TOKEN`).
 
 ---
 
-## 5. Security & Constraints
+## 6. CLI Reference
 
-Telos is designed with "Safety First" defaults:
-- **Daily Loop Limit**: Prevents runaway costs (Defualt: 10, Adjustable).
-- **Hard Memory Limits**: Sandbox cannot crash the host machine.
-- **Prompt Isolation**: Tools are strictly defined; the agent cannot perform arbitrary host commands.
+| Command | Description | Useful Flags |
+|:---|:---|:---|
+| `telos init` | Setup directories, `.env`, and `config.yaml`. | `--force` |
+| `telos start` | Launch the autonomous engine. | `--loops N`, `--verbose` |
+| `telos status` | Dashboard of recent loop scores and costs. | |
+| `telos show` | Deep-dive into a specific loop result and trace. | `[loop_id]` |
+| `telos explain` | Generate a human-readable narrative of a loop. | `[loop_id]` |
+| `telos summary` | Export a Markdown report of recent activity. | `--limit N` |
+| `telos logs` | View raw system and agent logs. | `-f` (follow) |
+
+---
+
+## 7. Customization
+- **Rubric**: Edit `rubric.json` to change how the Critic judges work.
+- **Templates**: Modify files in `templates/` to inject "personality" or specific coding standards into the Producer agent.

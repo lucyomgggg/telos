@@ -11,15 +11,20 @@ log = get_logger("sandbox")
 
 class SandboxManager:
     def __init__(self, image_name=None, container_name=None):
-        from .config import settings
+        from .config import settings, PROJECT_ROOT
         self.settings = settings.load()
         
         self.image_name = image_name or self.settings.sandbox.image
         self.container_name = container_name or self.settings.sandbox.container_name
         self.container = None
         self.use_docker = self.settings.sandbox.use_docker
-        self.local_workspace = Path(os.getcwd()) / "workspace"
+        
+        workspace_name = self.settings.memory.workspace_path
+        self.local_workspace = PROJECT_ROOT / workspace_name
         self.local_workspace.mkdir(exist_ok=True)
+        
+        self.mem_limit = self.settings.sandbox.memory_limit
+        self.cmd_timeout = self.settings.sandbox.timeout
         
         if self.use_docker:
             try:
@@ -33,8 +38,12 @@ class SandboxManager:
     def build_image(self, dockerfile_path="."):
         """Build the sandbox Docker image if it doesn't exist."""
         log.info("Building Docker image %s...", self.image_name)
-        self.client.images.build(path=dockerfile_path, tag=self.image_name)
-        log.info("Docker image built successfully.")
+        try:
+            self.client.images.build(path=dockerfile_path, tag=self.image_name)
+            log.info("Docker image built successfully.")
+        except Exception as e:
+            log.error("Failed to build Docker image: %s", e)
+            raise
 
     def start(self):
         """Start the sandbox container."""
@@ -55,8 +64,8 @@ class SandboxManager:
                 name=self.container_name,
                 detach=True,
                 network_mode="bridge",
-                mem_limit="512m",
-                memswap_limit="512m",
+                mem_limit=self.mem_limit,
+                memswap_limit=self.mem_limit,
                 network_disabled=False,
             )
             log.info("Created and started new container %s", self.container_name)
@@ -74,10 +83,14 @@ class SandboxManager:
                 log.info("Container %s stopped and removed.", self.container_name)
             except docker.errors.NotFound:
                 pass
+            except Exception as e:
+                log.error("Error stopping container: %s", e)
             self.container = None
 
-    def execute_command(self, command: str, timeout: int = 30) -> dict:
+    def execute_command(self, command: str, timeout: int = None) -> dict:
         """Execute a command inside the sandbox."""
+        exec_timeout = timeout or self.cmd_timeout
+        
         if not self.use_docker:
             try:
                 result = subprocess.run(
@@ -86,7 +99,7 @@ class SandboxManager:
                     cwd=str(self.local_workspace),
                     capture_output=True,
                     text=True,
-                    timeout=timeout
+                    timeout=exec_timeout
                 )
                 output = result.stdout
                 if result.stderr:
@@ -96,7 +109,7 @@ class SandboxManager:
                     "output": output
                 }
             except subprocess.TimeoutExpired:
-                log.warning("Command timed out after %ds: %s", timeout, command[:80])
+                log.warning("Command timed out after %ds: %s", exec_timeout, command[:80])
                 return {
                     "exit_code": 124,
                     "output": "Command timed out."
@@ -111,7 +124,6 @@ class SandboxManager:
             self.start()
         
         import threading
-        
         result_container = []
         
         def run_command():
@@ -126,17 +138,17 @@ class SandboxManager:
 
         thread = threading.Thread(target=run_command)
         thread.start()
-        thread.join(timeout=timeout)
+        thread.join(timeout=exec_timeout)
 
         if thread.is_alive():
-            log.warning("Command timed out after %ds: %s", timeout, command[:80])
-            # Attempt to kill the process inside the container if possible
-            # For simplicity in this runtime, we might just return timeout
-            # and let the next command handle it, or stop the container.
+            log.warning("Command timed out after %ds: %s", exec_timeout, command[:80])
             return {
                 "exit_code": 124,
-                "output": f"Error: Command timed out after {timeout} seconds."
+                "output": f"Error: Command timed out after {exec_timeout} seconds."
             }
+
+        if not result_container:
+            return {"exit_code": 1, "output": "Unknown error: No result captured."}
 
         exec_result = result_container[0]
         if isinstance(exec_result, Exception):
