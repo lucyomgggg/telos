@@ -7,6 +7,7 @@ Telos is an open-source autonomous runtime designed to bridge the gap between AI
 Instead of just responding to prompts, Telos acts as a continuous loop that builds, tests, and refines software and data artifacts independently.
 
 ## 🏗️ Architecture
+For a deep dive into the system design, see the [System Architecture](docs/ARCHITECTURE.md) document.
 
 Telos is built on a modular "Closed-Loop" architecture consisting of five core pillars:
 
