@@ -1,4 +1,5 @@
 import os
+import signal
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -98,23 +99,35 @@ def stop():
         click.echo(f"Permission denied sending signal to PID. Try: kill $(cat {PID_FILE})")
 
 @cli.command()
-def status():
-    """Show current loop status, cost, and scores."""
+@click.option('--limit', default=10, help='Number of loops to show.')
+def status(limit):
+    """Show loop history, scores, and costs."""
     from .memory import MemoryStore
     memory = MemoryStore()
-    loops = memory.list_loops(limit=5)
+    loops = memory.list_loops(limit=limit)
     
     if not loops:
-        click.echo("No loops recorded yet.")
+        click.echo(click.style("No loops recorded yet. Run 'telos start' to begin.", dim=True))
         return
         
-    click.echo(f"{'ID':<38} | {'Status':<10} | {'Score':<6} | {'Cost':<8} | {'Goal'}")
-    click.echo("-" * 110)
+    click.echo(f"\n{click.style('📊 TELOS EXECUTION HISTORY', fg='cyan', bold=True)}")
+    click.echo(f"{click.style('ID', dim=True):<10} | {click.style('Status', dim=True):<10} | {click.style('Score', dim=True):<7} | {click.style('Cost', dim=True):<8} | {click.style('Goal', dim=True)}")
+    click.echo(click.style("-" * 100, dim=True))
+    
     for loop in loops:
+        loop_id = loop['id'][:8]
+        status_color = 'green' if loop['status'] == 'completed' else 'yellow' if loop['status'] == 'running' else 'red'
+        status_str = click.style(loop['status'], fg=status_color)
+        
+        score_val = loop['score'] if loop['score'] is not None else 0.0
+        score_color = 'green' if score_val > 0.7 else 'yellow' if score_val > 0.4 else 'red'
+        score_str = click.style(f"{score_val:.2f}", fg=score_color) if loop['score'] is not None else click.style("N/A", dim=True)
+        
         cost = f"${loop['cost_usd']:.4f}"
-        score = f"{loop['score']:.2f}" if loop['score'] is not None else "N/A"
-        goal = loop['goal'][:40] + "..." if len(loop['goal']) > 40 else loop['goal']
-        click.echo(f"{loop['id']:<38} | {loop['status']:<10} | {score:<6} | {cost:<8} | {goal}")
+        goal = loop['goal'][:50] + "..." if len(loop['goal']) > 50 else loop['goal']
+        
+        click.echo(f"{loop_id:<10} | {status_str:<10} | {score_str:<7} | {cost:<8} | {goal}")
+    click.echo("")
 
 @cli.command()
 @click.option('--lines', '-n', default=50, type=int, help='Number of lines to show')
@@ -122,19 +135,17 @@ def status():
 def logs(lines, follow):
     """View agent logs."""
     if not LOG_FILE.exists():
-        click.echo("No logs yet. Run 'telos start' first.")
+        click.echo(click.style("No logs yet. Run 'telos start' first.", fg='yellow'))
         return
     
     if follow:
-        # Tail -f mode
         import subprocess
-        click.echo(f"Following {LOG_FILE} (Ctrl+C to stop)...")
+        click.echo(f"Following {click.style(str(LOG_FILE), bold=True)} (Ctrl+C to stop)...")
         try:
             subprocess.run(["tail", "-f", "-n", str(lines), str(LOG_FILE)])
         except KeyboardInterrupt:
             pass
     else:
-        # Show last N lines
         with open(LOG_FILE, "r") as f:
             all_lines = f.readlines()
             tail = all_lines[-lines:]
@@ -143,102 +154,125 @@ def logs(lines, follow):
 
 @cli.command()
 @click.argument("loop_id", required=False)
-def show(loop_id):
+@click.option("--explain", is_flag=True, help="Provide a narrative explanation of the loop.")
+def show(loop_id, explain):
     """Show details of a specific loop (defaults to latest)."""
     from .memory import MemoryStore
+    from .telos_core import AgentLoop
     store = MemoryStore()
     
     if not loop_id:
         latest = store.list_loops(limit=1)
         if not latest:
-            click.echo("No loops found.")
+            click.echo(click.style("No loops found.", fg='yellow'))
             return
         loop_id = latest[0]['id']
-        click.echo(f"Showing latest loop: {loop_id}")
+        click.echo(click.style(f"Showing latest loop: {loop_id}", dim=True))
 
     loop = store.get_loop(loop_id)
     if not loop:
-        click.echo(f"Loop {loop_id} not found.")
+        click.echo(click.style(f"Loop {loop_id} not found.", fg='red'))
         return
 
-    click.echo(f"\n{'='*60}")
-    click.echo(f" LOOP ID: {loop['id']}")
-    click.echo(f" STATUS:  {loop['status']}")
-    click.echo(f" TIME:    {loop['created_at']}")
-    click.echo(f"{'='*60}")
-    click.echo(f" GOAL:    {loop['goal']}")
-    click.echo(f"{'-'*60}")
-    click.echo(f" SCORE:   {loop['score']} / 1.0")
+    click.echo(f"\n{click.style('═' * 80, fg='cyan')}")
+    click.echo(f" {click.style('LOOP ID:', bold=True)} {loop['id']}")
+    click.echo(f" {click.style('STATUS:', bold=True)}  {loop['status']}")
+    click.echo(f" {click.style('TIME:', bold=True)}    {loop['created_at']}")
+    click.echo(f"{click.style('═' * 80, fg='cyan')}")
+    click.echo(f" {click.style('GOAL:', bold=True)}    {loop['goal']}")
+    click.echo(f"{click.style('─' * 80, dim=True)}")
+    
+    score_val = loop['score'] if loop['score'] is not None else 0.0
+    score_color = 'green' if score_val > 0.7 else 'yellow' if score_val > 0.4 else 'red'
+    click.echo(f" {click.style('SCORE:', bold=True)}   {click.style(f'{score_val:.2f}', fg=score_color, bold=True)} / 1.0")
+    
     if loop['score_breakdown']:
-        click.echo(f" BREAKDOWN: {loop['score_breakdown']}")
-    click.echo(f"{'='*60}")
-    click.echo(f" RESULT:\n{loop['result'] or '(No result recorded)'}")
-    click.echo(f"{'='*60}\n")
+        click.echo(f" {click.style('BREAKDOWN:', dim=True)} {loop['score_breakdown']}")
+    
+    click.echo(f"{click.style('═' * 80, fg='cyan')}")
+    
+    if explain:
+        click.echo(f" {click.style('📜 NARRATIVE EXPLANATION', fg='yellow', bold=True)}")
+        agent = AgentLoop()
+        with click.progressbar(length=1, label="🤖 Thinking...") as bar:
+            explanation = agent.explain_loop(loop_id)
+            bar.update(1)
+        click.echo(explanation)
+        click.echo(f"{click.style('═' * 80, fg='cyan')}")
+    else:
+        click.echo(f" {click.style('📄 EXECUTION RESULT', fg='yellow', bold=True)}")
+        click.echo(loop['result'] or "(No result recorded)")
+        click.echo(f"{click.style('═' * 80, fg='cyan')}\n")
 
 @cli.command()
-@click.option("--limit", default=10, help="Number of loops to include.")
-def summary(limit):
-    """Generate a Markdown summary of recent loop results."""
+@click.option("--limit", default=5, help="Number of loops to include.")
+@click.option("--output", "-o", default="REPORT.md", help="Path to save the report.")
+def report(limit, output):
+    """Generate a Markdown execution report."""
     from .memory import MemoryStore
     store = MemoryStore()
     loops = store.list_loops(limit=limit)
     
-    summary_path = Path.cwd() / "SUMMARY.md"
-    content = "# Telos Execution Summary\n\n"
-    content += f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-    content += "| ID | Goal | Score | Status |\n"
-    content += "|---|---|---|---|\n"
+    if not loops:
+        click.echo(click.style("No loops found to report.", fg='yellow'))
+        return
+
+    content = [
+        f"# 🤖 Telos Execution Report",
+        f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+        "## 🔄 Recent Activity",
+        "| ID | Created | Goal | Score | Status |",
+        "|---|---|---|---|---|",
+    ]
     
     for l in loops:
-        goal_short = (l['goal'][:50] + '...') if len(l['goal']) > 50 else l['goal']
-        content += f"| {l['id'][:8]} | {goal_short} | {l['score'] or 'N/A'} | {l['status']} |\n"
+        score_val = f"{l['score']:.2f}" if l['score'] is not None else "N/A"
+        goal_short = (l['goal'][:60] + '...') if len(l['goal']) > 60 else l['goal']
+        content.append(f"| `{l['id'][:8]}` | {l['created_at']} | {goal_short} | {score_val} | {l['status']} |")
     
-    summary_path.write_text(content)
-    click.echo(f"Summary generated at {summary_path}")
+    content.append("\n## 📂 Workspace Artifacts")
+    workspace_path = Path("workspace")
+    if workspace_path.exists():
+        files = list(workspace_path.glob("*"))
+        if files:
+            content.append("```")
+            for f in sorted(files, key=lambda x: x.stat().st_mtime, reverse=True):
+                mtime = datetime.fromtimestamp(f.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                content.append(f"{f.name:<30} | {mtime}")
+            content.append("```")
+        else:
+            content.append("_ (Empty workspace) _")
+    else:
+        content.append("_ (Workspace directory not found) _")
+
+    Path(output).write_text("\n".join(content))
+    click.echo(f"✅ Report generated: {click.style(output, bold=True)}")
 
 @cli.command()
-def outputs():
-    """List generated outputs."""
-    from .memory import MemoryStore
-    memory = MemoryStore()
-    loops = memory.list_loops(limit=10)
-    
-    if not loops:
-        click.echo("No outputs recorded yet.")
-        return
-        
-    click.echo(f"{'ID':<38} | {'Score':<6} | {'Output Path/Indicator'}")
-    click.echo("-" * 80)
-    for loop in filter(lambda l: l['status'] == 'completed', loops):
-        score = f"{loop['score']:.2f}" if loop['score'] is not None else "N/A"
-        path = loop['output_path'] or "Stored in Memory"
-        click.echo(f"{loop['id']:<38} | {score:<6} | {path}")
-
-@cli.command()
-@click.argument("loop_id", required=False)
-def explain(loop_id):
-    """Provide a narrative explanation of a loop's actions."""
-    from .telos_core import AgentLoop
-    from .memory import MemoryStore
-    
-    store = MemoryStore()
-    if not loop_id:
-        latest = store.list_loops(limit=1)
-        if not latest:
-            click.echo("No loops found.")
+@click.option('--yes', is_flag=True, help='Skip confirmation.')
+def clean(yes):
+    """Clear workspace files and temporary logs."""
+    if not yes:
+        if not click.confirm(click.style("⚠️ Are you sure you want to clear the workspace and logs?", fg='red')):
             return
-        loop_id = latest[0]['id']
-        click.echo(f"Explaining latest loop: {loop_id}")
 
-    agent = AgentLoop()
-    with click.progressbar(length=1, label="🤖 Generating explanation...") as bar:
-        explanation = agent.explain_loop(loop_id)
-        bar.update(1)
+    # Clear workspace
+    workspace_path = Path("workspace")
+    if workspace_path.exists():
+        import shutil
+        for item in workspace_path.iterdir():
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+        click.echo("🧹 Workspace cleared.")
+
+    # Clear logs
+    if LOG_FILE.exists():
+        LOG_FILE.unlink()
+        click.echo("🧹 logs cleared.")
     
-    click.echo(f"\n{click.style('📜 LOOP EXPLANATION', fg='cyan', bold=True)}")
-    click.echo(f"{'-'*60}")
-    click.echo(explanation)
-    click.echo(f"{'-'*60}\n")
+    click.echo(click.style("✨ Cleanup complete.", fg='green', bold=True))
 
 def main():
     cli()

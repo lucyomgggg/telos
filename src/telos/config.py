@@ -28,6 +28,7 @@ class LLMSettings(BaseModel):
     model: str = Field(default="gemini/gemini-flash-latest", description="Default model (fallback)")
     producer_model: str = Field(default="gemini/gemini-flash-latest", description="Model for the Producer agent")
     critic_model: str = Field(default="gemini/gemini-flash-latest", description="Model for the Critic agent")
+    goal_gen_model: Optional[str] = Field(default=None, description="Dedicated model for goal generation (falls back to producer_model if None)")
     max_tokens_per_loop: int = Field(default=100000, description="Token limit per loop iteration")
 
 class MemorySettings(BaseModel):

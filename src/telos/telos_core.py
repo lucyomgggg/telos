@@ -152,9 +152,11 @@ class AgentLoop:
         current_settings = settings.load() 
         self.producer_model = current_settings.llm.producer_model
         self.critic_model = current_settings.llm.critic_model
+        self.goal_gen_model = current_settings.llm.goal_gen_model or self.producer_model
         
         self.llm = LLMInterface(model=self.producer_model)
         self.critic_llm = LLMInterface(model=self.critic_model)
+        self.goal_gen_llm = LLMInterface(model=self.goal_gen_model)
 
     def _check_safety(self):
         current_settings = settings.load()
@@ -196,7 +198,7 @@ class AgentLoop:
         for attempt in range(1, 4):
             try:
                 # TOOLCALL: Use forced tool calling instead of json_object
-                response = self.llm.chat(
+                response = self.goal_gen_llm.chat(
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
@@ -232,7 +234,7 @@ class AgentLoop:
             output_path="output.txt"
         )
 
-    def run_iteration(self, initial_intent: str = "Explore the system"):
+    def run_iteration(self, initial_intent: str = "Establish existence and evolve."):
         loop_id, goal = self._prepare_iteration(initial_intent)
         
         try:
@@ -276,6 +278,15 @@ class AgentLoop:
         )
         messages = [{"role": "user", "content": user_content}]
         system_prompt = self.templates.load("producer_system", "Execute the goal.")
+        
+        # PROMPT ENHANCEMENT: Inject lessons learned from previous failure
+        last_failed = self.storage.sqlite.get_recent_history(limit=5)
+        lessons = [f"- Previous Goal '{h['goal']}' failed: {h.get('score_breakdown', {}).get('reasoning', 'No detail')}" 
+                   for h in last_failed if h['score'] is not None and h['score'] < 0.3]
+        if lessons:
+            system_prompt += "\n\nCRITICAL LESSONS FROM RECENT FAILURES (DO NOT REPEAT THESE MISTAKES):\n" + "\n".join(lessons[:2])
+            log.info(f"Injected {len(lessons[:2])} failure lessons into system prompt.")
+
         tools = [t.definition for t in self.storage.tool_registry.values()]
 
         final_result = ""
