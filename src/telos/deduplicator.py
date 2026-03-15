@@ -7,8 +7,9 @@ log = get_logger("deduplicator")
 _MODEL_CACHE = {}
 
 class GoalDeduplicator:
-    def __init__(self, threshold: float = 0.9, model_name: str = 'all-MiniLM-L6-v2'):
-        self.threshold = threshold
+    def __init__(self, threshold: float = None, model_name: str = 'all-MiniLM-L6-v2'):
+        from .config import settings
+        self.threshold = threshold if threshold is not None else settings.deduplication_threshold
         try:
             if model_name not in _MODEL_CACHE:
                 _MODEL_CACHE[model_name] = SentenceTransformer(model_name)

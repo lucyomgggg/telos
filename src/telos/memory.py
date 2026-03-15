@@ -100,12 +100,15 @@ class VectorStore:
             
         qdrant_url = self.settings.memory.qdrant_url
         try:
-            self.client = QdrantClient(url=qdrant_url, timeout=5)
+            self.client = QdrantClient(url=qdrant_url, timeout=2)
+            # Explicit ping to verify availability
+            self.client.get_collections()
             self._ensure_collection()
             self.available = True
             log.info("Qdrant connected at %s with vector_size=%d", qdrant_url, self.vector_size)
         except Exception as e:
-            log.warning("Qdrant unavailable, vector search disabled: %s", e)
+            log.warning("Qdrant unreachable, vector storage disabled (using silent fallback): %s", e)
+            self.available = False
 
     def _ensure_collection(self):
         try:

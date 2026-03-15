@@ -9,12 +9,15 @@ class TestLocalSandbox:
 
     @pytest.fixture
     def sandbox(self, tmp_path, monkeypatch):
+        from telos.sandbox import LocalSandboxStrategy
         monkeypatch.chdir(tmp_path)
         sm = SandboxManager.__new__(SandboxManager)
         sm.use_docker = False
         sm.container = None
         sm.local_workspace = tmp_path / "workspace"
         sm.local_workspace.mkdir(exist_ok=True)
+        sm.cmd_timeout = 300
+        sm.strategy = LocalSandboxStrategy(sm.local_workspace)
         return sm
 
     def test_write_and_read_file(self, sandbox):
@@ -50,3 +53,10 @@ class TestLocalSandbox:
         sandbox.write_file("overwrite.txt", "second")
         content = sandbox.read_file("overwrite.txt")
         assert content == "second"
+
+    def test_path_traversal_protection(self, sandbox):
+        with pytest.raises(ValueError, match="Security Error"):
+            sandbox.write_file("../traversal.txt", "malicious content")
+        
+        with pytest.raises(ValueError, match="Security Error"):
+            sandbox.read_file("../../etc/passwd")

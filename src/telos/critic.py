@@ -109,44 +109,61 @@ class CriticAgent:
                 log.debug(f"Artifact content length: {len(artifact_content)}")
 
                 # Attempt to parse from tool calls first
-                if msg.tool_calls:
-                    try:
-                        tool_call = msg.tool_calls[0]
-                        evaluation = json.loads(tool_call.function.arguments)
-                        log.debug(f"Parsed evaluation from tool call: {evaluation}")
-                    except (ValueError, AttributeError) as e:
-                        log.warning(f"Failed to parse tool call arguments (attempt {attempt}): {e}")
+                try:
+                    if msg.tool_calls:
+                        try:
+                            tool_call = msg.tool_calls[0]
+                            raw_args = tool_call.function.arguments
+                            try:
+                                evaluation = json.loads(raw_args)
+                                log.debug(f"Parsed evaluation from tool call: {evaluation}")
+                            except (ValueError, AttributeError) as e:
+                                log.warning(f"Failed to parse tool call arguments (attempt {attempt}): {e}")
+                                log.debug(f"Raw tool arguments: {raw_args}")
+                        except (IndexError, AttributeError):
+                            pass
 
-                # Fallback: Check content if tool_calls failed or were missing
-                if not evaluation and msg.content:
-                    try:
-                        # Find potential JSON in the string
-                        import re
-                        match = re.search(r'\{.*\}', msg.content, re.DOTALL)
-                        if match:
-                            raw_json = json.loads(match.group())
-                            log.info(f"Fallback: Parsed JSON from message content (attempt {attempt})")
-                            
-                            # Handle wrapped tool call format: {"function_name": "...", "arguments": {...}}
-                            if "arguments" in raw_json:
-                                if isinstance(raw_json["arguments"], dict):
-                                    evaluation = raw_json["arguments"]
-                                elif isinstance(raw_json["arguments"], str):
-                                    try:
-                                        evaluation = json.loads(raw_json["arguments"])
-                                    except ValueError:
+                    # Fallback: Check content if tool_calls failed or were missing
+                    if not evaluation and msg.content:
+                        try:
+                            # Find potential JSON in the string
+                            import re
+                            match = re.search(r'\{.*\}', msg.content, re.DOTALL)
+                            if match:
+                                raw_json = json.loads(match.group())
+                                log.info(f"Fallback: Parsed JSON from message content (attempt {attempt})")
+                                
+                                # Handle wrapped tool call format: {"function_name": "...", "arguments": {...}}
+                                if "arguments" in raw_json:
+                                    if isinstance(raw_json["arguments"], dict):
+                                        evaluation = raw_json["arguments"]
+                                    elif isinstance(raw_json["arguments"], str):
+                                        try:
+                                            evaluation = json.loads(raw_json["arguments"])
+                                        except ValueError:
+                                            evaluation = raw_json
+                                    else:
                                         evaluation = raw_json
                                 else:
                                     evaluation = raw_json
-                            else:
-                                evaluation = raw_json
-                            
-                            log.debug(f"Resolved evaluation object: {evaluation}")
-                    except ValueError:
-                        pass
+                                
+                                log.debug(f"Resolved evaluation object: {evaluation}")
+                        except ValueError:
+                            pass
+                except Exception as e:
+                    log.warning(f"Error during JSON extraction (attempt {attempt}): {e}")
 
                 if not evaluation:
-                    log.warning(f"No valid evaluation found in response (attempt {attempt}). Content: {msg.content[:100]}...")
+                    log.warning(f"No valid evaluation found in response (attempt {attempt}).")
+                    log.debug(f"Raw message content: {msg.content}")
+                    if attempt == 3:
+                        return {
+                            "overall_score": 0.0,
+                            "breakdown": {},
+                            "criteria_met": [],
+                            "reasoning": f"Evaluation failed: Could not parse JSON from Critic response after 3 attempts. Raw content: {msg.content[:200]}...",
+                            "failed": True
+                        }
                     continue
 
                 # Calculate weighted average

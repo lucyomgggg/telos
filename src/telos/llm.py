@@ -8,72 +8,18 @@ from .logger import get_logger
 
 log = get_logger("llm")
 
-# Disable litellm telemetry
+# Disable litellm telemetry and ensure compatibility
 litellm.telemetry = False
+litellm.drop_params = True
 
 class LLMInterface:
     def __init__(self, model: Optional[str] = None):
         self.model = model or settings.llm.model
         log.debug("LLM initialized with model: %s", self.model)
         
-        # Tools available to the agent
-        self.tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "execute_command",
-                    "description": "Execute a shell command inside the secure sandbox environment.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": "The shell command to execute."
-                            }
-                        },
-                        "required": ["command"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "write_file",
-                    "description": "Write text content to a file in the sandbox workspace.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {
-                                "type": "string",
-                                "description": "The destination path relative to the workspace."
-                            },
-                            "content": {
-                                "type": "string",
-                                "description": "The text content to write."
-                            }
-                        },
-                        "required": ["path", "content"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_file",
-                    "description": "Read the contents of a file from the sandbox workspace.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "path": {
-                                "type": "string",
-                                "description": "The path to the file relative to the workspace."
-                            }
-                        },
-                        "required": ["path"]
-                    }
-                }
-            }
-        ]
+        # Tools available to the agent - decentralized to tools.py
+        from .tools import get_standard_tool_definitions
+        self.tools = get_standard_tool_definitions()
 
     def chat(self, messages: List[Dict[str, Any]], system: str = "", max_retries: int = 5, **kwargs) -> Any:
         """Send a chat request to the LLM with tool definitions and robust retry logic."""
@@ -130,15 +76,26 @@ class LLMInterface:
                     raise
     
     def calculate_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
-        """Calculate approximate cost using litellm's cost tracking."""
+        """Calculate approximate cost using litellm's cost tracking with fallbacks."""
         try:
             cost = litellm.completion_cost(
                 model=self.model,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens
             )
-            return cost or 0.0
-        except Exception:
+            if cost is not None and cost > 0:
+                return cost
+                
+            # Fallback for models not yet in litellm's local database (estimated 0.0)
+            # Use a conservative average cost if it's a known expensive model family
+            # or a very small default for local models
+            if "ollama" in self.model:
+                return 0.0 # Local is free
+            
+            # Default fallback for unknown paid models (e.g. $1 per 1M tokens)
+            return (prompt_tokens + completion_tokens) * 0.000001
+        except Exception as e:
+            log.warning("Cost calculation fallback triggered for %s: %s", self.model, e)
             return 0.0
 
     def validate_token_limit(self, current_loop_tokens: int) -> bool:

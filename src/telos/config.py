@@ -59,6 +59,7 @@ class Settings(BaseModel):
     daily_loop_limit: int = Field(default=10, description="Max loops per day")
     monthly_cost_limit: float = Field(default=50.0, description="Max USD budget per month")
     rate_limit_delay: float = Field(default=6.0, description="Seconds to wait between LLM calls")
+    deduplication_threshold: float = Field(default=0.9, description="Similarity threshold for goal deduplication")
     max_steps: int = Field(default=15, description="Maximum steps per loop execution")
     consecutive_error_limit: int = Field(default=3, description="Abort after N consecutive tool errors")
     max_output_truncation: int = Field(default=1000, description="Truncate tool outputs longer than this")

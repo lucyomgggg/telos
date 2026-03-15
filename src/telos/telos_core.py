@@ -12,6 +12,7 @@ from .config import settings, TELOS_HOME, PID_FILE, TEMPLATES_DIR
 from .logger import get_logger
 from .memory import MemoryStore, VectorStore
 from .db_models import AuditLog, LoopRecord
+from .utils import repair_json
 
 log = get_logger("core")
 
@@ -55,7 +56,11 @@ class CostTracker:
 
         tokens = usage.total_tokens
         model = getattr(response, 'model', 'unknown')
-        cost = litellm.completion_cost(response) or 0.0
+        try:
+            cost = litellm.completion_cost(response) or 0.0
+        except Exception as e:
+            log.warning(f"Could not calculate cost for model {model}: {e}")
+            cost = 0.0
         
         session = self.memory_store.Session()
         try:
@@ -123,11 +128,11 @@ class Storage:
         self._register_default_tools()
 
     def _register_default_tools(self):
-        from .tools import BashTool, WriteFileTool, ReadFileTool, TaskCompleteTool # REDESIGN: 2
+        from .tools import BashTool, WriteFileTool, ReadFileTool, TaskCompleteTool
         self.register_tool("execute_command", BashTool(self.sandbox))
         self.register_tool("write_file", WriteFileTool(self.sandbox))
         self.register_tool("read_file", ReadFileTool(self.sandbox))
-        self.register_tool("task_complete", TaskCompleteTool()) # REDESIGN: 2
+        self.register_tool("task_complete", TaskCompleteTool())
 
     def register_tool(self, name: str, tool: Tool):
         self.tool_registry[name] = tool
@@ -211,15 +216,34 @@ class AgentLoop:
                 # TOOLCALL: Parse from tool calling response
                 try:
                     tool_call = response.choices[0].message.tool_calls[0]
-                    goal_data = json.loads(tool_call.function.arguments)
-                    goal = GoalSchema(**goal_data) # REDESIGN: 1
-                except Exception as e:
-                    log.warning(f"Failed to parse or validate goal tool arguments: {e}")
-                    continue
+                    raw_args = tool_call.function.arguments
+                    try:
+                        # Attempt repair before parsing
+                        repaired_args = repair_json(raw_args)
+                        goal_data = json.loads(repaired_args)
+                        goal = GoalSchema(**goal_data)
+                    except Exception as e:
+                        log.error(f"Failed to parse or validate goal tool arguments (Attempt {attempt}): {e}")
+                        log.debug(f"Raw arguments that failed: {raw_args}")
+                        user_prompt += f"\nError in previous attempt: Your tool call generated invalid JSON. Please follow the schema strictly."
+                        continue
+                        
+                except (AttributeError, IndexError) as e:
+                    log.warning(f"Goal generation response didn't contain expected tool call format: {e}")
+                    # Attempt to parse from content if tool_calls missing (fallback)
+                    content = response.choices[0].message.content
+                    if content:
+                        try:
+                            goal_data = json.loads(repair_json(content))
+                            goal = GoalSchema(**goal_data)
+                        except Exception:
+                            continue
+                    else:
+                        continue
 
                 if self.deduplicator.is_duplicate(goal.title, [h["goal"] for h in history]): # REDESIGN: 1
                     log.info(f"Goal '{goal.title}' is a duplicate, retrying...")
-                    user_prompt += f"\nNote: '{goal.title}' is too similar to history. Be more distinct."
+                    user_prompt += f"\nNote: '{goal.title}' is too similar to history: {[h['goal'] for h in history[-3:]]}. Be more distinct and creative."
                     continue
                 
                 return goal
@@ -297,6 +321,7 @@ class AgentLoop:
         max_output = current_settings.max_output_truncation
 
         consecutive_errors = 0
+        total_tokens = 0
         for step in range(max_steps):
             if step > 0:
                 time.sleep(rate_limit_delay)
@@ -309,50 +334,24 @@ class AgentLoop:
             )
             self.cost_tracker.record_usage(response, "producer", loop_id)
             
+            # Track tokens and enforce limit
+            usage = getattr(response, 'usage', None)
+            if usage:
+                total_tokens += usage.total_tokens
+                if not self.llm.validate_token_limit(total_tokens):
+                    log.warning(f"Loop {loop_id} exceeded token limit ({total_tokens} tokens). Aborting.")
+                    final_result = f"Loop aborted: Exceeded token limit of {settings.llm.max_tokens_per_loop} tokens."
+                    break
+
             msg = response.choices[0].message
             messages.append(msg.model_dump())
 
             if msg.tool_calls:
-                for tool_call in msg.tool_calls:
-                    name = tool_call.function.name
-                    args = json.loads(tool_call.function.arguments)
-                    
-                    log.info(f"[Tool] {name}({str(args)[:100]}...)")
-                    
-                    tool = self.storage.tool_registry.get(name)
-                    result = tool.execute(args) if tool else f"Error: Tool {name} not found."
-                    
-                    if result.startswith("TASK_COMPLETE:"):
-                        final_result = result
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": name,
-                            "content": result
-                        })
-                        break
-                    
-                    if len(result) > max_output:
-                        log.info(f"Truncating long output for tool '{name}' ({len(result)} chars)")
-                        result = result[:max_output] + f"\n\n[... Output truncated from {len(result)} characters to {max_output} to save tokens ...]"
-                    
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": name,
-                        "content": result
-                    })
-                    
-                    if "Error" in result:
-                        consecutive_errors += 1
-                    else:
-                        consecutive_errors = 0
-                        
-                    if consecutive_errors >= error_limit:
-                        log.warning(f"Aborting loop due to {error_limit} consecutive errors: {result}")
-                        final_result = f"Loop aborted due to {error_limit} consecutive errors: {result}"
-                        break
-                if consecutive_errors >= error_limit or final_result.startswith("TASK_COMPLETE:"): break
+                final_result, consecutive_errors = self._handle_tool_calls(
+                    msg.tool_calls, messages, consecutive_errors, error_limit, max_output
+                )
+                if consecutive_errors >= error_limit or final_result.startswith("TASK_COMPLETE:"):
+                    break
             else:
                 final_result = msg.content or "Completed."
                 break
@@ -361,6 +360,66 @@ class AgentLoop:
             final_result = f"Loop reached max steps ({max_steps}) without a final response."
             
         return messages, final_result
+
+    def _handle_tool_calls(self, tool_calls, messages, consecutive_errors, error_limit, max_output) -> tuple[str, int]:
+        """Process a list of tool calls from the LLM."""
+        final_result = ""
+        for tool_call in tool_calls:
+            name = tool_call.function.name
+            raw_args = tool_call.function.arguments
+            log.info(f"[Tool] {name}({str(raw_args)[:100]}...)")
+            
+            tool = self.storage.tool_registry.get(name)
+            try:
+                # TOOLCALL repair
+                repaired_args = repair_json(raw_args)
+                args = json.loads(repaired_args)
+            except json.JSONDecodeError as e:
+                log.error(f"Failed to decode tool arguments for {name}: {e}")
+                log.debug(f"Raw malformed arguments: {raw_args}")
+                result = f"Error: Malformed JSON arguments for tool {name}. Please ensure arguments match the schema exactly."
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": name,
+                    "content": result
+                })
+                consecutive_errors += 1
+                continue
+
+            result = tool.execute(args) if tool else f"Error: Tool {name} not found."
+            
+            if result.startswith("TASK_COMPLETE:"):
+                final_result = result
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": name,
+                    "content": result
+                })
+                break
+            
+            if len(result) > max_output:
+                log.info(f"Truncating long output for tool '{name}' ({len(result)} chars)")
+                result = result[:max_output] + f"\n\n[... Output truncated from {len(result)} characters to {max_output} to save tokens ...]"
+            
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "name": name,
+                "content": result
+            })
+            
+            if "Error" in result:
+                consecutive_errors += 1
+            else:
+                consecutive_errors = 0
+                
+            if consecutive_errors >= error_limit:
+                log.warning(f"Aborting loop due to {error_limit} consecutive errors: {result}")
+                final_result = f"Loop aborted due to {error_limit} consecutive errors: {result}"
+                break
+        return final_result, consecutive_errors
 
     def _finalize_iteration(self, loop_id: str, goal: GoalSchema, messages: List[Dict], final_result: str) -> Dict:
         evaluation = self.critic_agent.evaluate(
@@ -389,3 +448,37 @@ class AgentLoop:
         self.storage.sqlite.save_loop(loop_data)
         self.storage.vector.embed_and_store(final_result, {"loop_id": loop_id, "goal": goal.title})
         return loop_data
+
+    def explain_loop(self, loop_id: str) -> str:
+        """Provide a narrative summary of what happened in a specific loop."""
+        loop = self.storage.sqlite.get_loop(loop_id)
+        if not loop:
+            return f"Error: Loop {loop_id} not found."
+
+        goal = loop.get("goal", "Unknown")
+        result = loop.get("result", "(No result)")
+        score = loop.get("score", 0.0)
+        messages = loop.get("messages", [])
+
+        # Construct a prompt for the explainer
+        history_text = "\n".join([f"{m['role']}: {str(m.get('content'))[:500]}..." for m in messages if m['role'] != 'system'])
+        
+        prompt = (
+            f"Please explain the following autonomous agent loop in a narrative, concise way.\n\n"
+            f"Goal: {goal}\n"
+            f"Final Result: {result}\n"
+            f"Score: {score}/1.0\n\n"
+            f"Interaction History:\n{history_text}\n\n"
+            f"Explanation:"
+        )
+
+        try:
+            response = self.llm.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system="You are a technical analyst explaining an autonomous agent's actions."
+            )
+            self.cost_tracker.record_usage(response, "explainer", loop_id)
+            return response.choices[0].message.content or "Could not generate explanation."
+        except Exception as e:
+            log.error(f"Failed to generate explanation: {e}")
+            return f"Error generating narrative: {e}"
