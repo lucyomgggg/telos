@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from .telos_core import Tool
+from .interfaces import Tool
 from .sandbox import SandboxManager
 
 class BashTool(Tool):
@@ -91,7 +91,6 @@ class ReadFileTool(Tool):
         }
 
 class TaskCompleteTool(Tool):
-    # REDESIGN: 2
     """エージェントがタスク完了を宣言するためのツール"""
     
     def execute(self, params: Dict[str, Any]) -> str:
@@ -120,13 +119,7 @@ class TaskCompleteTool(Tool):
 
 def get_standard_tool_definitions() -> list[dict]:
     """Returns a list of all standard tool definitions for LLM registration."""
-    # We instantiate temporary sandbox-less tools just to get their definitions
-    # This is a bit hacky but avoids manual duplication.
-    # In a real system, definition might be a class attribute.
-    from .sandbox import SandboxManager
-    # Passing None to avoid actual sandbox initialization if possible, 
-    # but the classes expect a SandboxManager.
-    # For definition retrieval, we don't actually use the sandbox.
+    # Dummy sandbox to avoid actual initialization
     dummy_sandbox = None 
     return [
         BashTool(dummy_sandbox).definition,
