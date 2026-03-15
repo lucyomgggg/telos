@@ -13,10 +13,16 @@ PROJECT_ROOT = Path.cwd()
 LOCAL_CONFIG = PROJECT_ROOT / "config.yaml"
 # Default to project-local data folder
 TELOS_HOME = Path(os.getenv("TELOS_HOME", PROJECT_ROOT / "data"))
-CONFIG_PATH = LOCAL_CONFIG if LOCAL_CONFIG.exists() else (TELOS_HOME / "config.yaml")
+def _safe_exists(p: Path) -> bool:
+    try:
+        return p.exists()
+    except PermissionError:
+        return False
+
+CONFIG_PATH = LOCAL_CONFIG if _safe_exists(LOCAL_CONFIG) else (TELOS_HOME / "config.yaml")
 
 # Fallback for creating new config
-if not CONFIG_PATH.exists():
+if not _safe_exists(CONFIG_PATH):
     CONFIG_PATH = LOCAL_CONFIG
 
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"

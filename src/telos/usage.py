@@ -56,7 +56,7 @@ class CostTracker:
     def get_monthly_cost(self) -> float:
         session = self.memory_store.Session()
         try:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             first_day = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             cost = session.query(func.sum(AuditLog.cost_usd)).filter(AuditLog.timestamp >= first_day).scalar()
             return float(cost or 0.0)
@@ -66,7 +66,7 @@ class CostTracker:
     def get_daily_loop_count(self) -> int:
         session = self.memory_store.Session()
         try:
-            today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
             count = session.query(func.count(LoopRecord.id)).filter(LoopRecord.created_at >= today).scalar()
             return int(count or 0)
         finally:

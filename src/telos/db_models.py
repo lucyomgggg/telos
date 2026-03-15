@@ -14,11 +14,13 @@ class LoopRecord(Base):
     output_path = Column(String, nullable=True)
     score = Column(Float, nullable=True)               # Overall score from Critic
     score_breakdown = Column(JSON, nullable=True)      # Detailed scores per rubric axis
+    reasoning = Column(String, nullable=True)          # PERSISTENCE FIX: Added to store reasoning
     tokens_used = Column(Integer, default=0)
     cost_usd = Column(Float, default=0.0)
     status = Column(String, default="running")         # running, completed, failed, timeout
     error = Column(String, nullable=True)
     result = Column(String, nullable=True)            # The final text artifact
+    criteria_met = Column(JSON, nullable=True)         # Added to store criteria success
     messages = Column(JSON, nullable=True)            # Full interaction trace (for 'explain')
 
     def to_dict(self):
@@ -33,6 +35,8 @@ class LoopRecord(Base):
             "cost_usd": self.cost_usd,
             "status": self.status,
             "error": self.error,
+            "criteria_met": self.criteria_met,
+            "reasoning": self.reasoning,
             "result": self.result
         }
 

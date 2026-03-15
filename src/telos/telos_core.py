@@ -3,7 +3,7 @@ import json
 import uuid
 import time
 from datetime import datetime, timezone
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any, Dict, Tuple
 
 from .config import settings, TELOS_HOME
 from .logger import get_logger
@@ -12,68 +12,19 @@ from .llm import LLMService
 from .usage import CostTracker
 from .schemas import GoalSchema
 from .interfaces import Tool, Critic, TemplateLoader
+from .agents import BaseAgent
+from .tools import ToolRegistry
 
 log = get_logger("core")
 
-class Storage:
-    def __init__(self, sqlite_store: Optional[MemoryStore] = None, vector_store: Optional[VectorStore] = None):
-        self.sqlite = sqlite_store or MemoryStore()
-        self.vector = vector_store or VectorStore()
-        from .sandbox import SandboxManager
-        self.sandbox = SandboxManager()
-        self.tool_registry: Dict[str, Tool] = {}
-        self._register_default_tools()
-
-    def _register_default_tools(self):
-        from .tools import BashTool, WriteFileTool, ReadFileTool, TaskCompleteTool
-        self.register_tool("execute_command", BashTool(self.sandbox))
-        self.register_tool("write_file", WriteFileTool(self.sandbox))
-        self.register_tool("read_file", ReadFileTool(self.sandbox))
-        self.register_tool("task_complete", TaskCompleteTool())
-
-    def register_tool(self, name: str, tool: Tool):
-        self.tool_registry[name] = tool
-        log.debug(f"Registered tool: {name}")
-
-# --- Agent Loop ---
-
-class AgentLoop:
-    def __init__(self, storage: Optional[Storage] = None, critic: Optional[Critic] = None):
-        self.storage = storage or Storage()
-        self.cost_tracker = CostTracker(self.storage.sqlite)
-        self.templates = TemplateLoader()
-        
-        from .critic import CriticAgent
+class GoalGenerator(BaseAgent):
+    def __init__(self, cost_tracker: Any = None):
+        super().__init__(agent_type="goal_gen", cost_tracker=cost_tracker)
         from .deduplicator import GoalDeduplicator
-        
-        self.critic_agent = critic or CriticAgent(cost_tracker=self.cost_tracker)
         self.deduplicator = GoalDeduplicator()
-        
-        current_settings = settings.load() 
-        
-        # Centralized LLM Services
-        self.producer_llm = LLMService(model=current_settings.llm.producer_model, cost_tracker=self.cost_tracker)
-        self.goal_gen_llm = LLMService(model=current_settings.llm.goal_gen_model or current_settings.llm.producer_model, cost_tracker=self.cost_tracker)
 
-    def _check_safety(self):
-        current_settings = settings.load()
-        daily_limit = current_settings.daily_loop_limit
-        monthly_limit = current_settings.monthly_cost_limit
-        
-        daily_loops = self.cost_tracker.get_daily_loop_count()
-        if daily_loops >= daily_limit:
-            raise RuntimeError(f"Daily loop limit reached: {daily_loops}/{daily_limit}")
-        
-        monthly_cost = self.cost_tracker.get_monthly_cost()
-        if monthly_cost >= monthly_limit:
-            raise RuntimeError(f"Monthly cost limit reached: ${monthly_cost:.2f}/${monthly_limit:.2f}")
-
-    def _generate_goal(self, initial_intent: str, loop_id: str = "system") -> GoalSchema:
-        """Query memory and LLM to decide the next objective."""
-        history = self.storage.sqlite.get_recent_history(limit=20)
+    def generate(self, initial_intent: str, history: List[Dict], similar: List[Dict]) -> GoalSchema:
         history_text = "\n".join([f"- Goal: {h['goal']} | Score: {h['score']}" for h in history])
-        
-        similar = self.storage.vector.search_similar(initial_intent, limit=3)
         similar_text = ""
         if similar:
             similar_text = "\nPast artifacts found in vector memory:\n" + "\n".join(
@@ -81,21 +32,14 @@ class AgentLoop:
             )
         
         user_prompt = f"Ambient Intent: {initial_intent}\n\nRecent History:\n{history_text}{similar_text}\n\nDecision: Generate the next goal."
-        system_prompt = self.templates.load("goal_generation_system", "Generate a new and distinct goal for the autonomous agent.")
+        system_prompt = self.load_template("goal_generation_system", "Generate a new and distinct goal.")
         
-        # Use structured chat for goal generation
         try:
-            goal = self.goal_gen_llm.chat_structured(
+            goal = self.chat_structured(
                 messages=[{"role": "user", "content": user_prompt}],
                 response_model=GoalSchema,
-                system=system_prompt,
-                loop_id=loop_id,
-                agent_type="goal_gen"
+                system=system_prompt
             )
-
-            if self.deduplicator.is_duplicate(goal.title, [h["goal"] for h in history]):
-                log.info(f"Goal '{goal.title}' is a duplicate, but using it as fallback for now or retrying logic could be added here.")
-            
             return goal
         except Exception as e:
             log.error(f"Goal generation failed: {e}")
@@ -105,83 +49,42 @@ class AgentLoop:
                 output_path="output.txt"
             )
 
-    def run_iteration(self, initial_intent: str = "Establish existence and evolve."):
-        loop_id, goal = self._prepare_iteration(initial_intent)
-        
-        try:
-            self.storage.sandbox.start()
-            messages, final_result = self._execute_loop(loop_id, goal)
-            loop_data = self._finalize_iteration(loop_id, goal, messages, final_result)
-            return loop_data
+class ProducerAgent(BaseAgent):
+    def __init__(self, cost_tracker: Any = None):
+        super().__init__(agent_type="producer", cost_tracker=cost_tracker)
 
-        except Exception as e:
-            log.error(f"Loop {loop_id} failed: {e}")
-            self.storage.sqlite.save_loop({
-                "id": loop_id,
-                "goal": goal.title,
-                "goal_detail": goal.model_dump(),
-                "status": "failed",
-                "error": str(e)
-            })
-            raise
-        finally:
-            self.storage.sandbox.stop()
-
-    def _prepare_iteration(self, initial_intent: str) -> tuple[str, GoalSchema]:
-        self._check_safety()
-        loop_id = str(uuid.uuid4())
-        goal = self._generate_goal(initial_intent, loop_id=loop_id)
-        log.info(f"Starting loop {loop_id} with goal: {goal.title}")
-
-        self.storage.sqlite.save_loop({
-            "id": loop_id,
-            "goal": goal.title,
-            "goal_detail": goal.model_dump(),
-            "status": "running"
-        })
-        return loop_id, goal
-
-    def _execute_loop(self, loop_id: str, goal: GoalSchema) -> tuple[List[Dict], str]:
+    def execute_goal(self, loop_id: str, goal: GoalSchema, registry: ToolRegistry, lessons: List[str]) -> Tuple[List[Dict], str]:
         user_content = (
             f"Goal: {goal.title}\n"
             f"Success Criteria:\n" + "\n".join(f"- {c}" for c in goal.success_criteria) +
             f"\nOutput must be saved to: {goal.output_path}"
         )
         messages = [{"role": "user", "content": user_content}]
-        system_prompt = self.templates.load("producer_system", "Execute the goal.")
+        system_prompt = self.load_template("producer_system", "Execute the goal.")
         
-        last_failed = self.storage.sqlite.get_recent_history(limit=5)
-        lessons = [f"- Previous Goal '{h['goal']}' failed: {h.get('score_breakdown', {}).get('reasoning', 'No detail')}" 
-                   for h in last_failed if h['score'] is not None and h['score'] < 0.3]
         if lessons:
-            system_prompt += "\n\nCRITICAL LESSONS FROM RECENT FAILURES (DO NOT REPEAT THESE MISTAKES):\n" + "\n".join(lessons[:2])
-            log.info(f"Injected {len(lessons[:2])} failure lessons into system prompt.")
+            system_prompt += "\n\nCRITICAL LESSONS FROM RECENT FAILURES:\n" + "\n".join(lessons[:2])
 
         final_result = ""
-        current_settings = settings.load()
-        max_steps = current_settings.max_steps
-        error_limit = current_settings.consecutive_error_limit
-        max_output = current_settings.max_output_truncation
-
         consecutive_errors = 0
         total_tokens = 0
-        for step in range(max_steps):
+        
+        for step in range(self.settings.max_steps):
             if step > 0:
-                time.sleep(current_settings.rate_limit_delay)
+                time.sleep(self.settings.rate_limit_delay)
 
-            response = self.producer_llm.chat(
+            response = self.chat(
                 system=system_prompt,
                 messages=messages,
-                loop_id=loop_id,
-                agent_type="producer"
+                loop_id=loop_id
             )
             
             usage = getattr(response, 'usage', None)
             if usage:
                 total_tokens += usage.total_tokens
-                if not self.producer_llm.validate_token_limit(total_tokens):
-                    log.warning(f"Loop {loop_id} exceeded token limit ({total_tokens} tokens). Aborting.")
-                    final_result = f"Loop aborted: Exceeded token limit."
+                if not self.llm.validate_token_limit(total_tokens):
+                    log.warning(f"Loop {loop_id} exceeded token limit. Aborting.")
+                    final_result = "Loop aborted: Exceeded token limit."
                     break
 
             msg = response.choices[0].message
@@ -189,102 +92,114 @@ class AgentLoop:
 
             if msg.tool_calls:
                 final_result, consecutive_errors = self._handle_tool_calls(
-                    msg.tool_calls, messages, consecutive_errors, error_limit, max_output
+                    msg.tool_calls, messages, registry, consecutive_errors
                 )
-                if consecutive_errors >= error_limit or final_result.startswith("TASK_COMPLETE:"):
+                if consecutive_errors >= self.settings.consecutive_error_limit or final_result.startswith("TASK_COMPLETE:"):
                     break
             else:
                 final_result = msg.content or "Completed."
                 break
         
-        if not final_result:
-            final_result = f"Loop reached max steps ({max_steps}) without a final response."
-            
-        return messages, final_result
+        return messages, final_result or "Loop reached max steps."
 
-    def _handle_tool_calls(self, tool_calls, messages, consecutive_errors, error_limit, max_output) -> tuple[str, int]:
+    def _handle_tool_calls(self, tool_calls, messages, registry, consecutive_errors) -> Tuple[str, int]:
         final_result = ""
         for tool_call in tool_calls:
             name = tool_call.function.name
             raw_args = tool_call.function.arguments
-            log.info(f"[Tool] {name}({str(raw_args)[:100]}...)")
+            tool = registry.get(name)
             
-            tool = self.storage.tool_registry.get(name)
             try:
                 from .utils import repair_json
-                repaired_args = repair_json(raw_args)
-                args = json.loads(repaired_args)
+                args = json.loads(repair_json(raw_args))
                 result = tool.execute(args) if tool else f"Error: Tool {name} not found."
             except Exception as e:
-                log.error(f"Tool execution failed for {name}: {e}")
                 result = f"Error: {e}"
 
             if result.startswith("TASK_COMPLETE:"):
                 final_result = result
 
-            if len(result) > max_output:
-                result = result[:max_output] + "... (truncated)"
+            limit = self.settings.max_output_truncation
+            if len(result) > limit:
+                result = result[:limit] + "... (truncated)"
             
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "name": name,
-                "content": result
-            })
+            messages.append({"role": "tool", "tool_call_id": tool_call.id, "name": name, "content": result})
+            consecutive_errors = (consecutive_errors + 1) if "Error" in result else 0
             
-            if "Error" in result:
-                consecutive_errors += 1
-            else:
-                consecutive_errors = 0
-                
-            if consecutive_errors >= error_limit:
-                final_result = f"Loop aborted due to errors."
+            if consecutive_errors >= self.settings.consecutive_error_limit:
+                final_result = "Loop aborted due to errors."
                 break
         return final_result, consecutive_errors
 
-    def _finalize_iteration(self, loop_id: str, goal: GoalSchema, messages: List[Dict], final_result: str) -> Dict:
-        evaluation = self.critic_agent.evaluate(
-            goal=goal,
-            artifact_path=goal.output_path,
-            sandbox=self.storage.sandbox,
-            loop_id=loop_id
-        )
+class Orchestrator:
+    def __init__(self):
+        from .sandbox import SandboxManager
+        from .critic import CriticAgent
         
-        loop_data = {
-            "id": loop_id,
-            "goal": goal.title,
-            "goal_detail": goal.model_dump(),
-            "status": "completed",
-            "score": evaluation.get("overall_score", 0.0),
-            "score_breakdown": evaluation.get("breakdown", {}),
-            "criteria_met": evaluation.get("criteria_met", []),
-            "result": final_result,
-            "messages": messages
-        }
+        self.sqlite = MemoryStore()
+        self.vector = VectorStore()
+        self.cost_tracker = CostTracker(self.sqlite)
+        self.sandbox = SandboxManager()
+        self.registry = ToolRegistry(self.sandbox)
+        
+        self.goal_gen = GoalGenerator(self.cost_tracker)
+        self.producer = ProducerAgent(self.cost_tracker)
+        self.critic = CriticAgent(cost_tracker=self.cost_tracker)
 
-        if evaluation.get("failed"):
-            loop_data["status"] = "failed"
-            loop_data["error"] = evaluation.get("reasoning")
-
-        self.storage.sqlite.save_loop(loop_data)
-        self.storage.vector.embed_and_store(final_result, {"loop_id": loop_id, "goal": goal.title})
-        return loop_data
-
-    def explain_loop(self, loop_id: str) -> str:
-        loop = self.storage.sqlite.get_loop(loop_id)
-        if not loop:
-            return f"Error: Loop {loop_id} not found."
-
-        history_text = "\n".join([f"{m['role']}: {str(m.get('content'))[:500]}..." for m in loop.get("messages", []) if m['role'] != 'system'])
-        prompt = f"Please explain this agent loop:\nGoal: {loop.get('goal')}\nResult: {loop.get('result')}\nScore: {loop.get('score')}\nHistory:\n{history_text}"
-
+    def run_iteration(self, intent: str = "Establish existence and evolve.") -> Dict:
+        loop_id = str(uuid.uuid4())
         try:
-            response = self.producer_llm.chat(
-                messages=[{"role": "user", "content": prompt}],
-                system="You are a technical analyst.",
-                loop_id=loop_id,
-                agent_type="explainer"
-            )
-            return response.choices[0].message.content or "No explanation."
-        except Exception as e:
-            return f"Error: {e}"
+            self._check_safety()
+            self.sandbox.start()
+            
+            # 1. Goal Generation
+            history = self.sqlite.get_recent_history(limit=20)
+            similar = self.vector.search_similar(intent, limit=3)
+            goal = self.goal_gen.generate(intent, history, similar)
+            
+            self.sqlite.save_loop({"id": loop_id, "goal": goal.title, "status": "running"})
+            log.info(f"Starting loop {loop_id}: {goal.title}")
+
+            # 2. Execution
+            lessons = [f"Goal '{h['goal']}' failed: {h.get('reasoning', 'No detail')}" 
+                       for h in history if h['score'] is not None and h['score'] < 0.3]
+            
+            messages, result = self.producer.execute_goal(loop_id, goal, self.registry, lessons)
+
+            # 3. Evaluation
+            eval_res = self.critic.evaluate(goal, goal.output_path, self.sandbox, loop_id)
+            
+            # 4. Finalize
+            loop_data = {
+                "id": loop_id,
+                "goal": goal.title,
+                "goal_detail": goal.model_dump(),
+                "status": "completed" if not eval_res.get("failed") else "failed",
+                "score": eval_res.get("overall_score", 0.0),
+                "score_breakdown": eval_res.get("breakdown", {}),
+                "reasoning": eval_res.get("reasoning", ""),
+                "result": result,
+                "messages": messages
+            }
+            self.sqlite.save_loop(loop_data)
+            self.vector.embed_and_store(result, {"loop_id": loop_id, "goal": goal.title})
+            return loop_data
+
+        finally:
+            self.sandbox.stop()
+
+    def _check_safety(self):
+        curr = settings.load()
+        if self.cost_tracker.get_daily_loop_count() >= curr.daily_loop_limit:
+            raise RuntimeError("Daily loop limit reached.")
+        if self.cost_tracker.get_monthly_cost() >= curr.monthly_cost_limit:
+            raise RuntimeError("Monthly budget exceeded.")
+
+class AgentLoop(Orchestrator):
+    """Legacy wrapper for CLI compatibility."""
+    def explain_loop(self, loop_id: str) -> str:
+        loop = self.sqlite.get_loop(loop_id)
+        if not loop: return "Loop not found."
+        prompt = f"Explain this loop:\nGoal: {loop['goal']}\nResult: {loop['result']}"
+        resp = self.producer.chat(messages=[{"role": "user", "content": prompt}], system="You are an analyst.")
+        return resp.choices[0].message.content or "No explanation."

@@ -9,6 +9,6 @@ Evaluation Rules:
    - Coherence: Does the artifact match the original goal accurately?
 
 Evaluate the following result only. Do NOT look at the producer's thought process.
-You MUST provide your evaluation in JSON format using the tool provided. If you cannot use the tool, provide the JSON block in your response.
-JSON structure must include "scores" (with keys: novelty, completeness, coherence), "criteria_met" (array of booleans), and "reasoning".
+You MUST provide your evaluation in JSON format using the tool provided.
+JSON structure must include "completeness", "coherence", "novelty", "criteria_met" (array of booleans), and "reasoning".
 Everything is scored on a scale of 0.0 to 1.0.

@@ -7,21 +7,15 @@ from .logger import get_logger
 from .schemas import GoalSchema, EvaluationResponse
 from .interfaces import TemplateLoader
 
-log = get_logger("critic")
+from .agents import BaseAgent
 
-class CriticAgent:
+class CriticAgent(BaseAgent):
     def __init__(self, rubric_path: str = None, cost_tracker: Any = None):
-        self.settings = settings.load()
-        self.cost_tracker = cost_tracker
+        super().__init__(agent_type="critic", cost_tracker=cost_tracker)
         
         explicit_rubric_path = rubric_path or self.settings.critic.rubric_path
         self.rubric_path = Path(explicit_rubric_path) if explicit_rubric_path else (TELOS_HOME / "rubric.json")
-        
-        # Use centralized LLMService
-        self.llm = LLMService(model=self.settings.llm.critic_model, cost_tracker=self.cost_tracker)
         self.rubric = self._load_rubric()
-        
-        self.templates = TemplateLoader()
 
     def _load_rubric(self) -> dict:
         if not self.rubric_path.exists():
@@ -35,7 +29,7 @@ class CriticAgent:
             self.rubric_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.rubric_path, "w") as f:
                 json.dump(default_rubric, f, indent=4)
-            log.info("Created default rubric at %s", self.rubric_path)
+            self.log.info("Created default rubric at %s", self.rubric_path)
             return default_rubric
         
         with open(self.rubric_path, "r") as f:
@@ -48,7 +42,7 @@ class CriticAgent:
             try:
                 artifact_content = sandbox.read_file(artifact_path)
             except Exception as e:
-                log.warning(f"Could not read artifact: {e}")
+                self.log.warning(f"Could not read artifact: {e}")
                 artifact_content = "(file not found)"
 
         user_prompt = (
@@ -57,16 +51,14 @@ class CriticAgent:
             f"\n\nArtifact Content:\n{artifact_content}"
         )
         
-        system_prompt = self.templates.load("critic_system", "Evaluate the artifact against the goal.")
+        system_prompt = self.load_template("critic_system", "Evaluate the artifact against the goal.")
         
         try:
-            # Use centralized structured chat
-            response = self.llm.chat_structured(
+            response = self.chat_structured(
                 messages=[{"role": "user", "content": user_prompt}],
                 response_model=EvaluationResponse,
                 system=system_prompt,
-                loop_id=loop_id,
-                agent_type="critic"
+                loop_id=loop_id
             )
 
             # Calculate weighted average based on rubric
@@ -90,11 +82,11 @@ class CriticAgent:
                 "reasoning": response.reasoning,
                 "failed": False
             }
-            log.info("Evaluation complete: score=%.2f", result["overall_score"])
+            self.log.info("Evaluation complete: score=%.2f", result["overall_score"])
             return result
 
         except Exception as e:
-            log.error(f"Critic evaluation failed: {e}")
+            self.log.error(f"Critic evaluation failed: {e}")
             return {
                 "overall_score": 0.0,
                 "breakdown": {},

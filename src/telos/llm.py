@@ -119,9 +119,15 @@ class LLMService:
                 repaired = repair_json(raw_args)
                 data = json.loads(repaired)
                 
-                # Handle nested 'arguments' if LLM wrapped it
+                # Handle nested 'arguments' or 'evaluation'/'scores' if LLM wrapped it
                 if "arguments" in data and isinstance(data["arguments"], dict):
                     data = data["arguments"]
+                
+                # If Critic nested it into 'scores' against instructions (common fallback)
+                if "scores" in data and isinstance(data["scores"], dict):
+                    data.update(data.pop("scores"))
+                if "evaluation" in data and isinstance(data["evaluation"], dict):
+                    data.update(data.pop("evaluation"))
 
                 return response_model(**data)
 

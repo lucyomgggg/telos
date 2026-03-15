@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from .interfaces import Tool
 from .sandbox import SandboxManager
 
@@ -117,13 +117,29 @@ class TaskCompleteTool(Tool):
             }
         }
 
+class ToolRegistry:
+    def __init__(self, sandbox: SandboxManager):
+        self._tools: Dict[str, Tool] = {}
+        self.sandbox = sandbox
+        self._register_defaults()
+
+    def _register_defaults(self):
+        self.register("execute_command", BashTool(self.sandbox))
+        self.register("write_file", WriteFileTool(self.sandbox))
+        self.register("read_file", ReadFileTool(self.sandbox))
+        self.register("task_complete", TaskCompleteTool())
+
+    def register(self, name: str, tool: Tool):
+        self._tools[name] = tool
+
+    def get(self, name: str) -> Optional[Tool]:
+        return self._tools.get(name)
+
+    def get_definitions(self) -> list[dict]:
+        return [t.definition for t in self._tools.values()]
+
 def get_standard_tool_definitions() -> list[dict]:
     """Returns a list of all standard tool definitions for LLM registration."""
-    # Dummy sandbox to avoid actual initialization
-    dummy_sandbox = None 
-    return [
-        BashTool(dummy_sandbox).definition,
-        WriteFileTool(dummy_sandbox).definition,
-        ReadFileTool(dummy_sandbox).definition,
-        TaskCompleteTool().definition
-    ]
+    # Dummy registry to get definitions without a live sandbox
+    registry = ToolRegistry(None)
+    return registry.get_definitions()
