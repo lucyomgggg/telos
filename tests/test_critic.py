@@ -1,7 +1,8 @@
 import pytest
 import json
 from pathlib import Path
-from telos.critic import CriticAgent
+from src.telos.critic import CriticAgent
+from src.telos.telos_core import GoalSchema
 
 
 class TestCriticAgent:

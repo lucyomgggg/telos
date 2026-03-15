@@ -3,6 +3,10 @@ import yaml
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import Optional
+import logging
+
+# --- Cache ---
+_settings_cache = None
 
 # --- Paths ---
 PROJECT_ROOT = Path.cwd()
@@ -29,7 +33,7 @@ class LLMSettings(BaseModel):
 class MemorySettings(BaseModel):
     qdrant_url: str = Field(default="http://localhost:6333", description="Qdrant vector store URL")
     collection_name: str = Field(default="telos_artifacts", description="Name of the Qdrant collection")
-    embedding_model: str = Field(default="gemini/embedding-001", description="Model used for semantic memory")
+    embedding_model: str = Field(default="all-MiniLM-L6-v2", description="Model used for semantic memory")
     workspace_path: str = Field(default="workspace", description="Path to the agent workspace")
 
 class SandboxSettings(BaseModel):
@@ -54,9 +58,16 @@ class Settings(BaseModel):
     daily_loop_limit: int = Field(default=10, description="Max loops per day")
     monthly_cost_limit: float = Field(default=50.0, description="Max USD budget per month")
     rate_limit_delay: float = Field(default=6.0, description="Seconds to wait between LLM calls")
+    max_steps: int = Field(default=15, description="Maximum steps per loop execution")
+    consecutive_error_limit: int = Field(default=3, description="Abort after N consecutive tool errors")
+    max_output_truncation: int = Field(default=1000, description="Truncate tool outputs longer than this")
 
     @classmethod
     def load(cls) -> "Settings":
+        global _settings_cache
+        if _settings_cache:
+            return _settings_cache
+            
         data = {}
         if CONFIG_PATH.exists():
             try:
@@ -79,6 +90,7 @@ class Settings(BaseModel):
         if env_docker := os.getenv("TELOS_USE_DOCKER"):
             settings.sandbox.use_docker = env_docker.lower() == "true"
         
+        _settings_cache = settings
         return settings
 
     def save(self):

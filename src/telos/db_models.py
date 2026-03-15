@@ -10,6 +10,7 @@ class LoopRecord(Base):
     id = Column(String, primary_key=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     goal = Column(String, nullable=False)
+    goal_detail = Column(JSON, nullable=True)          # REDESIGN: 1
     output_path = Column(String, nullable=True)
     score = Column(Float, nullable=True)               # Overall score from Critic
     score_breakdown = Column(JSON, nullable=True)      # Detailed scores per rubric axis

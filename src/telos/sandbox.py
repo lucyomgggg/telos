@@ -175,6 +175,11 @@ class SandboxManager:
         if not self.container:
             self.start()
         
+        # Ensure parent directory exists
+        parent_dir = os.path.dirname(f"/workspace/{dest_path}")
+        if parent_dir and parent_dir != "/workspace":
+            self.execute_command(f"mkdir -p {parent_dir}")
+
         tar_stream = io.BytesIO()
         with tarfile.open(fileobj=tar_stream, mode='w') as tar:
             tarinfo = tarfile.TarInfo(name=os.path.basename(dest_path))
@@ -183,7 +188,7 @@ class SandboxManager:
             tar.addfile(tarinfo, io.BytesIO(content.encode('utf-8')))
         
         tar_stream.seek(0)
-        self.container.put_archive(os.path.dirname(f"/workspace/{dest_path}"), tar_stream)
+        self.container.put_archive(parent_dir, tar_stream)
         log.debug("Wrote file to container: /workspace/%s", dest_path)
 
     def read_file(self, file_path: str) -> str:

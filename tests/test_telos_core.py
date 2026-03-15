@@ -31,36 +31,50 @@ def test_cost_tracker_record_usage(mock_storage):
     assert args[0].cost_usd == 0.01
 
 def test_agent_loop_safety_check(mock_storage):
-    loop = AgentLoop(storage=mock_storage)
-    loop.daily_limit = 10
-    loop.monthly_limit = 50.0
+    from src.telos.config import Settings
+    mock_settings = Settings()
+    mock_settings.daily_loop_limit = 10
+    mock_settings.monthly_cost_limit = 50.0
     
-    with patch.object(loop.cost_tracker, "get_daily_loop_count", return_value=11):
-        with pytest.raises(RuntimeError, match="Daily loop limit reached"):
-            loop._check_safety()
+    with patch("src.telos.telos_core.settings") as mock_settings_base:
+        mock_settings_base.load.return_value = mock_settings
+        loop = AgentLoop(storage=mock_storage)
+        
+        with patch.object(loop.cost_tracker, "get_daily_loop_count", return_value=11):
+            with pytest.raises(RuntimeError, match="Daily loop limit reached"):
+                loop._check_safety()
 
-    with patch.object(loop.cost_tracker, "get_daily_loop_count", return_value=0), \
-         patch.object(loop.cost_tracker, "get_monthly_cost", return_value=51.0):
-        with pytest.raises(RuntimeError, match="Monthly cost limit reached"):
-            loop._check_safety()
+        with patch.object(loop.cost_tracker, "get_daily_loop_count", return_value=0), \
+             patch.object(loop.cost_tracker, "get_monthly_cost", return_value=51.0):
+            with pytest.raises(RuntimeError, match="Monthly cost limit reached"):
+                loop._check_safety()
 
-@patch("litellm.completion")
+@patch("src.telos.llm.completion")
 @patch("litellm.completion_cost")
 def test_run_iteration(mock_cost, mock_completion, mock_storage):
-    mock_msg = MagicMock()
-    mock_msg.content = "Goal: X"
-    mock_msg.tool_calls = None
+    # Goal Gen Response
+    mock_msg_goal = MagicMock()
+    mock_msg_goal.content = None
+    mock_tool_call_goal = MagicMock()
+    mock_tool_call_goal.function.name = "set_goal"
+    mock_tool_call_goal.function.arguments = '{"title": "Test Goal", "success_criteria": ["Done"], "output_path": "test.txt"}'
+    mock_msg_goal.tool_calls = [mock_tool_call_goal]
     
-    mock_completion.return_value = MagicMock(
-        choices=[MagicMock(message=mock_msg)],
-        usage=MagicMock(total_tokens=50),
-        model="gemini-2.0-flash"
-    )
+    # Producer Response
+    mock_msg_prod = MagicMock()
+    mock_msg_prod.content = "Producer done"
+    mock_msg_prod.tool_calls = None
+
+    mock_completion.side_effect = [
+        MagicMock(choices=[MagicMock(message=mock_msg_goal)], usage=MagicMock(total_tokens=50), model="gemini-2.0-flash"),
+        MagicMock(choices=[MagicMock(message=mock_msg_prod)], usage=MagicMock(total_tokens=50), model="gemini-2.0-flash")
+    ]
     mock_cost.return_value = 0.001
     
     loop = AgentLoop(storage=mock_storage)
-    loop.run_iteration("Test intent")
+    with patch.object(loop.critic_agent, "evaluate", return_value={"overall_score": 0.8}):
+        loop.run_iteration("Test intent")
     
-    assert mock_completion.call_count == 3 # Goal Gen + Producer + Critic
-    mock_storage.sqlite.save_loop.assert_called_once()
+    assert mock_completion.call_count == 2 # Goal Gen + Producer (Critic evaluate is mocked)
+    assert mock_storage.sqlite.save_loop.call_count == 2 # Start and End
     mock_storage.vector.embed_and_store.assert_called_once()

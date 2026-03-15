@@ -89,3 +89,31 @@ class ReadFileTool(Tool):
                 }
             }
         }
+
+class TaskCompleteTool(Tool):
+    # REDESIGN: 2
+    """エージェントがタスク完了を宣言するためのツール"""
+    
+    def execute(self, params: Dict[str, Any]) -> str:
+        summary = params.get("summary", "Task completed.")
+        return f"TASK_COMPLETE: {summary}"
+    
+    @property
+    def definition(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "task_complete",
+                "description": "Call this when the goal is fully achieved. Do not call any other tools after this.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "summary": {
+                            "type": "string",
+                            "description": "What was accomplished and where the output was saved."
+                        }
+                    },
+                    "required": ["summary"]
+                }
+            }
+        }

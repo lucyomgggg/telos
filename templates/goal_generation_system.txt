@@ -5,4 +5,5 @@ Rules:
 - If past goals succeeded with low scores, improve upon them.
 - If past goals succeeded with high scores, try something new and more ambitious.
 - The goal must be achievable with shell commands, file writing, and Python.
-- Be specific and concrete. Output ONLY the goal text, nothing else.
+- You MUST use the `set_goal` tool to submit the goal.
+- Be specific about the `output_path` (e.g., a specific filename for the script or result).

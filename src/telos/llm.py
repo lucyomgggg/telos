@@ -3,7 +3,7 @@ import time
 from typing import List, Dict, Any, Optional
 import litellm
 from litellm import completion
-from .config import settings, MAX_TOKENS_PER_LOOP
+from .config import settings
 from .logger import get_logger
 
 log = get_logger("llm")
@@ -101,6 +101,13 @@ class LLMInterface:
                 return response
             except Exception as e:
                 error_str = str(e).lower()
+                
+                # Check for fatal, non-retryable quota errors
+                is_fatal_quota = any(kw in error_str for kw in ["spending cap", "budget exceeded", "quota exceeded"])
+                if is_fatal_quota:
+                    log.error("Fatal API Quota Error: %s. Stopping immediately.", e)
+                    raise
+
                 # 429 is the key rate limit error
                 is_rate_limit = any(kw in error_str for kw in ["rate_limit", "429"])
                 is_retryable = is_rate_limit or any(kw in error_str for kw in ["timeout", "503", "500"])
@@ -135,5 +142,5 @@ class LLMInterface:
             return 0.0
 
     def validate_token_limit(self, current_loop_tokens: int) -> bool:
-        """Check if we've exceeded the hardcoded MAX_TOKENS_PER_LOOP."""
-        return current_loop_tokens <= MAX_TOKENS_PER_LOOP
+        """Check if we've exceeded the configured max_tokens_per_loop."""
+        return current_loop_tokens <= settings.llm.max_tokens_per_loop
