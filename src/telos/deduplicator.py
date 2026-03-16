@@ -33,22 +33,41 @@ class GoalDeduplicator:
             log.error("Failed to load SentenceTransformer: %s", e)
             self.model = None
 
-    def is_duplicate(self, new_goal: str, past_goals: list[str]) -> bool:
+    @staticmethod
+    def _dynamic_threshold(loop_count: int, base: float, floor: float = 0.65) -> float:
+        """Relax the similarity threshold as loop count grows.
+
+        As memory accumulates the embedding space becomes denser, so a static threshold
+        would progressively shrink the explorable search space.  Decay rate: -0.0005 per
+        loop (100 loops → ~0.80, 200 loops → ~0.75) down to a minimum of `floor`.
         """
-        Check if the new goal is too similar to any of the past goals.
-        Returns True if a duplicate is found (similarity >= threshold).
+        decay = min(base - floor, loop_count * 0.0005)
+        return round(max(floor, base - decay), 4)
+
+    def is_duplicate(self, new_goal: str, past_goals: list[str], loop_count: int = 0) -> bool:
+        """Check if the new goal is too similar to any of the past goals.
+
+        Args:
+            new_goal: The candidate goal title.
+            past_goals: List of previously accepted goal titles.
+            loop_count: Total number of completed loops so far.  Used to dynamically
+                relax the similarity threshold as memory grows.
+
+        Returns:
+            True if a duplicate is found (similarity >= effective threshold).
         """
         if not self.model or not past_goals:
             return False
-        
-        # Encode goals
+
+        effective_threshold = self._dynamic_threshold(loop_count, self.threshold)
+        log.debug("Dedup threshold: base=%.2f, loop_count=%d, effective=%.4f",
+                  self.threshold, loop_count, effective_threshold)
+
         new_emb = self.model.encode(new_goal, convert_to_tensor=True)
         past_embs = self.model.encode(past_goals, convert_to_tensor=True)
-        
-        # Calculate cosine similarities
+
         cosine_scores = util.cos_sim(new_emb, past_embs)[0]
-        
         max_score = float(cosine_scores.max())
-        log.debug("Max similarity score for new goal: %.4f", max_score)
-        
-        return max_score >= self.threshold
+        log.debug("Max similarity score for new goal: %.4f (threshold=%.4f)", max_score, effective_threshold)
+
+        return max_score >= effective_threshold

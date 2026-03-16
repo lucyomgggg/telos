@@ -25,23 +25,36 @@ class GoalGenerator(BaseAgent):
         from .deduplicator import GoalDeduplicator
         self.deduplicator = GoalDeduplicator()
 
-    def generate(self, initial_intent: str, history: List[Dict], similar: List[Dict]) -> GoalSchema:
+    def generate(self, initial_intent: str, history: List[Dict], similar: List[Dict],
+                 loop_count: int = 0) -> GoalSchema:
         history_text = "\n".join([f"- Goal: {h['goal']} | Score: {h['score']}" for h in history])
         similar_text = ""
         if similar:
             similar_text = "\nPast artifacts found in vector memory:\n" + "\n".join(
                 [f"- {s.get('payload', {}).get('goal', 'N/A')}" for s in similar]
             )
-        
+
         user_prompt = f"Ambient Intent: {initial_intent}\n\nRecent History:\n{history_text}{similar_text}\n\nDecision: Generate the next goal."
         system_prompt = self.load_template("goal_generation_system", "Generate a new and distinct goal.")
-        
+
+        past_titles = [h["goal"] for h in history if h.get("goal")]
+
         try:
             goal = self.chat_structured(
                 messages=[{"role": "user", "content": user_prompt}],
                 response_model=GoalSchema,
                 system=system_prompt
             )
+            if self.deduplicator.is_duplicate(goal.title, past_titles, loop_count=loop_count):
+                log.info("Goal '%s' is a duplicate; requesting a more novel goal.", goal.title)
+                novel_prompt = (user_prompt +
+                                f"\n\nNOTE: The proposed goal '{goal.title}' is too similar to recent history. "
+                                "Please generate a more distinct and novel goal.")
+                goal = self.chat_structured(
+                    messages=[{"role": "user", "content": novel_prompt}],
+                    response_model=GoalSchema,
+                    system=system_prompt
+                )
             return goal
         except Exception as e:
             log.error(f"Goal generation failed: {e}")
@@ -176,8 +189,16 @@ class Orchestrator:
 
             # 1. Goal Generation
             history = self.sqlite.get_recent_history(limit=settings.history_limit)
-            similar = self.vector.search_similar(intent, limit=settings.similar_artifacts_limit)
-            goal = self.goal_gen.generate(intent, history, similar)
+            loop_count = self.sqlite.count_loops()
+            # Use the most recent goal title as the Qdrant query to avoid intent-bias amplification.
+            # The initial_intent acts as a north star in the GoalGenerator prompt; we don't want it
+            # to also act as a Qdrant attractor that reinforces the same domain every loop.
+            qdrant_query = history[-1]["goal"] if history else intent
+            similar = self.vector.search_similar(qdrant_query, limit=settings.similar_artifacts_limit)
+            goal = self.goal_gen.generate(intent, history, similar, loop_count=loop_count)
+            # Prefix output_path with the short loop_id to prevent cross-loop file collisions.
+            if goal.output_path and not goal.output_path.startswith(loop_id[:8]):
+                goal.output_path = f"{loop_id[:8]}/{goal.output_path}"
 
             self.sqlite.save_loop({"id": loop_id, "goal": goal.title, "status": "running"})
             _loop_record_created = True

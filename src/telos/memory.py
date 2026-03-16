@@ -82,6 +82,49 @@ class MemoryStore:
         finally:
             session.close()
 
+    def count_loops(self) -> int:
+        """Return the total number of completed loop records."""
+        from sqlalchemy import func
+        session = self.Session()
+        try:
+            return int(session.query(func.count(LoopRecord.id)).scalar() or 0)
+        finally:
+            session.close()
+
+    def get_quality_history(self, top_n: int = 10, recent_failures: int = 5, recent_n: int = 5) -> list[dict]:
+        """Fetch a quality-weighted mix of history: high-scoring, recent failures, and recent loops.
+
+        This replaces a naive 'last N' window with a signal-dense context:
+        - top_n: loops with score >= 0.7 (success patterns)
+        - recent_failures: most recent loops with score < 0.3 (what to avoid)
+        - recent_n: most recent loops regardless of score (temporal continuity)
+        """
+        session = self.Session()
+        try:
+            top = (session.query(LoopRecord)
+                   .filter(LoopRecord.score >= 0.7)
+                   .order_by(LoopRecord.score.desc())
+                   .limit(top_n).all())
+
+            failures = (session.query(LoopRecord)
+                        .filter(LoopRecord.score < 0.3)
+                        .order_by(LoopRecord.created_at.desc())
+                        .limit(recent_failures).all())
+
+            recent = (session.query(LoopRecord)
+                      .order_by(LoopRecord.created_at.desc())
+                      .limit(recent_n).all())
+
+            seen: set = set()
+            merged: list = []
+            for r in top + failures + recent:
+                if r.id not in seen:
+                    seen.add(r.id)
+                    merged.append({"goal": r.goal, "score": r.score, "reasoning": r.reasoning})
+            return merged
+        finally:
+            session.close()
+
     def get_total_spend(self, since: datetime) -> float:
         """Calculate total USD spent since a given datetime."""
         from sqlalchemy import func
