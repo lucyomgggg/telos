@@ -52,7 +52,8 @@ class DockerSandboxStrategy(SandboxStrategy):
             try:
                 self.container.stop(timeout=2)
                 self.container.remove()
-            except Exception: pass
+            except Exception as e:
+                log.warning("Failed to stop/remove Docker container '%s': %s", self.container_name, e)
             self.container = None
 
     def execute(self, command: str, timeout: int) -> dict:

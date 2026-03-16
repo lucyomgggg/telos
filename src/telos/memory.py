@@ -11,6 +11,19 @@ from .logger import get_logger
 
 log = get_logger("memory")
 
+# Known embedding model dimensions. Used when embedding_dimensions is not set in config.
+_KNOWN_DIMENSIONS: dict = {
+    "all-MiniLM-L6-v2": 384,
+    "all-mpnet-base-v2": 768,
+    "nomic-embed-text": 768,
+    "text-embedding-ada-002": 1536,
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "openai/text-embedding-ada-002": 1536,
+    "openai/text-embedding-3-small": 1536,
+    "openai/text-embedding-3-large": 3072,
+}
+
 # --- Memory Store (SQLite) ---
 class MemoryStore:
     def __init__(self, db_path: str = None):
@@ -82,23 +95,29 @@ class MemoryStore:
 
 # --- Vector Store (Qdrant) ---
 class VectorStore:
-    def __init__(self, collection_name: str = "telos_artifacts"):
-        self.collection_name = collection_name
+    def __init__(self, collection_name: str = None):
         self.available = False
         self.client = None
         self._local_model = None
 
-        from .config import settings
-        self.settings = settings.load()
-        self.embedding_model = self.settings.memory.embedding_model
-        
-        # Determine vector size and local support
-        if self.embedding_model == "all-MiniLM-L6-v2":
-            self.vector_size = 384
+        cfg = settings.load()
+        self.embedding_model = cfg.memory.embedding_model
+        self.collection_name = collection_name or cfg.memory.collection_name
+
+        # Resolve vector dimensions: explicit config > known model dict > warn and default
+        if cfg.memory.embedding_dimensions:
+            self.vector_size = cfg.memory.embedding_dimensions
+        elif self.embedding_model in _KNOWN_DIMENSIONS:
+            self.vector_size = _KNOWN_DIMENSIONS[self.embedding_model]
         else:
-            self.vector_size = 1536 # Default for OpenAI/Gemini/Haiku
-            
-        qdrant_url = self.settings.memory.qdrant_url
+            self.vector_size = 1536
+            log.warning(
+                "Unknown embedding model '%s': defaulting to vector_size=1536. "
+                "Set memory.embedding_dimensions in config.yaml to suppress this.",
+                self.embedding_model,
+            )
+
+        qdrant_url = cfg.memory.qdrant_url
         try:
             self.client = QdrantClient(url=qdrant_url, timeout=2)
             # Explicit ping to verify availability

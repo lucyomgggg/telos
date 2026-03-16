@@ -5,16 +5,30 @@ from .logger import get_logger
 log = get_logger("deduplicator")
 
 _MODEL_CACHE = {}
+_LOCAL_FALLBACK = 'all-MiniLM-L6-v2'
 
 class GoalDeduplicator:
-    def __init__(self, threshold: float = None, model_name: str = 'all-MiniLM-L6-v2'):
+    def __init__(self, threshold: float = None, model_name: str = None):
         from .config import settings
-        self.threshold = threshold if threshold is not None else settings.deduplication_threshold
+        cfg = settings.load()
+        self.threshold = threshold if threshold is not None else cfg.deduplication_threshold
+
+        # Use the configured embedding model. API-style models (containing '/')
+        # cannot be used locally by sentence-transformers, so fall back to the
+        # default local model in that case.
+        resolved = model_name or cfg.memory.embedding_model
+        if '/' in resolved and not resolved.startswith('sentence-transformers/'):
+            log.info(
+                "API embedding model '%s' is not usable locally for deduplication; "
+                "falling back to %s.", resolved, _LOCAL_FALLBACK
+            )
+            resolved = _LOCAL_FALLBACK
+
         try:
-            if model_name not in _MODEL_CACHE:
-                _MODEL_CACHE[model_name] = SentenceTransformer(model_name)
-            self.model = _MODEL_CACHE[model_name]
-            log.info("GoalDeduplicator initialized with model: %s", model_name)
+            if resolved not in _MODEL_CACHE:
+                _MODEL_CACHE[resolved] = SentenceTransformer(resolved)
+            self.model = _MODEL_CACHE[resolved]
+            log.info("GoalDeduplicator initialized with model: %s", resolved)
         except Exception as e:
             log.error("Failed to load SentenceTransformer: %s", e)
             self.model = None

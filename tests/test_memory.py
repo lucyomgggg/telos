@@ -93,3 +93,41 @@ class TestVectorStore:
         # Operations should return gracefully
         assert vs.embed_and_store("test text") is None
         assert vs.search_similar("test query") == []
+
+    def test_vector_size_from_config_explicit(self):
+        """embedding_dimensions in config takes precedence over model-name lookup."""
+        from unittest.mock import patch
+        from telos.config import Settings, MemorySettings
+
+        mock_settings = Settings()
+        mock_settings.memory = MemorySettings(
+            embedding_model="some-unknown-model",
+            embedding_dimensions=768,
+        )
+
+        with patch("telos.memory.QdrantClient") as MockClient, \
+             patch("telos.memory.settings") as mock_settings_global:
+            mock_settings_global.load.return_value = mock_settings
+            MockClient.return_value.get_collections.side_effect = ConnectionRefusedError("no qdrant")
+            vs = VectorStore()
+
+        assert vs.vector_size == 768
+
+    def test_vector_size_auto_detected_from_known_model(self):
+        """Vector size is auto-detected from known model when embedding_dimensions is None."""
+        from unittest.mock import patch
+        from telos.config import Settings, MemorySettings
+
+        mock_settings = Settings()
+        mock_settings.memory = MemorySettings(
+            embedding_model="all-MiniLM-L6-v2",
+            embedding_dimensions=None,
+        )
+
+        with patch("telos.memory.QdrantClient") as MockClient, \
+             patch("telos.memory.settings") as mock_settings_global:
+            mock_settings_global.load.return_value = mock_settings
+            MockClient.return_value.get_collections.side_effect = ConnectionRefusedError("no qdrant")
+            vs = VectorStore()
+
+        assert vs.vector_size == 384

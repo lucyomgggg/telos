@@ -104,13 +104,23 @@ class ProducerAgent(BaseAgent):
         
         return messages, final_result or "Loop reached max steps."
 
+    def _truncate_tool_output(self, result: str) -> str:
+        """Truncate tool output, flagging JSON clearly to avoid confusing the agent."""
+        limit = self.settings.max_output_truncation
+        if len(result) <= limit:
+            return result
+        stripped = result.lstrip()
+        if stripped.startswith('{') or stripped.startswith('['):
+            return result[:limit] + "\n... [JSON TRUNCATED — output exceeded max_output_truncation]"
+        return result[:limit] + "... (truncated)"
+
     def _handle_tool_calls(self, tool_calls, messages, registry, consecutive_errors) -> Tuple[str, int]:
         final_result = ""
         for tool_call in tool_calls:
             name = tool_call.function.name
             raw_args = tool_call.function.arguments
             tool = registry.get(name)
-            
+
             try:
                 from .utils import repair_json
                 args = json.loads(repair_json(raw_args))
@@ -121,13 +131,11 @@ class ProducerAgent(BaseAgent):
             if result.startswith("TASK_COMPLETE:"):
                 final_result = result
 
-            limit = self.settings.max_output_truncation
-            if len(result) > limit:
-                result = result[:limit] + "... (truncated)"
-            
+            result = self._truncate_tool_output(result)
+
             messages.append({"role": "tool", "tool_call_id": tool_call.id, "name": name, "content": result})
             consecutive_errors = (consecutive_errors + 1) if "Error" in result else 0
-            
+
             if consecutive_errors >= self.settings.consecutive_error_limit:
                 final_result = "Loop aborted due to errors."
                 break

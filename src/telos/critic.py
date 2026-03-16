@@ -19,11 +19,13 @@ class CriticAgent(BaseAgent):
 
     def _load_rubric(self) -> dict:
         if not self.rubric_path.exists():
+            # Default matches rubric.json — single source of truth is the file on disk
             default_rubric = {
                 "axes": [
-                    {"name": "novelty", "weight": 0.4, "description": "Is this approach/result novel compared to previous iterations?"},
-                    {"name": "completeness", "weight": 0.4, "description": "Is the artifact complete and functional as requested?"},
-                    {"name": "coherence", "weight": 0.2, "description": "Does the artifact match the original goal?"}
+                    {"name": "completeness", "weight": 0.4, "description": "True if all requirements are met and no placeholders remain."},
+                    {"name": "coherence", "weight": 0.2, "description": "Logical consistency and code quality."},
+                    {"name": "novelty", "weight": 0.2, "description": "New capabilities or significant improvements compared to history."},
+                    {"name": "performance", "weight": 0.2, "description": "Efficiency of resource usage, concurrency safety, and low CPU/memory overhead."}
                 ]
             }
             self.rubric_path.parent.mkdir(parents=True, exist_ok=True)
@@ -31,7 +33,7 @@ class CriticAgent(BaseAgent):
                 json.dump(default_rubric, f, indent=4)
             self.log.info("Created default rubric at %s", self.rubric_path)
             return default_rubric
-        
+
         with open(self.rubric_path, "r") as f:
             return json.load(f)
 
@@ -50,9 +52,18 @@ class CriticAgent(BaseAgent):
             f"Success Criteria:\n" + "\n".join(f"- {c}" for c in goal.success_criteria) +
             f"\n\nArtifact Content:\n{artifact_content}"
         )
-        
-        system_prompt = self.load_template("critic_system", "Evaluate the artifact against the goal.")
-        
+
+        # Dynamically inject rubric axes into the prompt so it works with any rubric configuration
+        axes_lines = "\n".join(
+            f"  - {a['name']}: {a['description']}"
+            for a in self.rubric["axes"]
+        )
+        axes_instruction = (
+            f"Score ALL of the following axes (0.0 to 1.0) inside the `scores` field:\n{axes_lines}"
+        )
+        base_template = self.load_template("critic_system", "Evaluate the artifact against the goal.")
+        system_prompt = f"{base_template}\n\n{axes_instruction}"
+
         try:
             response = self.chat_structured(
                 messages=[{"role": "user", "content": user_prompt}],
@@ -61,20 +72,12 @@ class CriticAgent(BaseAgent):
                 loop_id=loop_id
             )
 
-            # Calculate weighted average based on rubric
-            overall_score = 0.0
-            scores = {
-                "completeness": response.completeness,
-                "coherence": response.coherence,
-                "novelty": response.novelty,
-                "performance": response.performance,
-            }
-            
-            for axis in self.rubric["axes"]:
-                name = axis["name"]
-                weight = axis["weight"]
-                score = scores.get(name, 0.0)
-                overall_score += (score * weight)
+            # Weighted score calculated purely from rubric — no hardcoded axis names
+            overall_score = sum(
+                axis["weight"] * response.scores.get(axis["name"], 0.0)
+                for axis in self.rubric["axes"]
+            )
+            scores = response.scores
             
             result = {
                 "overall_score": round(overall_score, 2),

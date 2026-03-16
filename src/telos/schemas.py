@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Dict
 from pydantic import BaseModel, Field
 
 class GoalSchema(BaseModel):
@@ -7,9 +7,9 @@ class GoalSchema(BaseModel):
     output_path: str = Field(..., description="成果物のファイルパス（例: solution.py）")
 
 class EvaluationResponse(BaseModel):
-    completeness: float = Field(..., ge=0, le=1)
-    coherence: float = Field(..., ge=0, le=1)
-    novelty: float = Field(..., ge=0, le=1)
-    performance: float = Field(..., ge=0, le=1)
+    scores: Dict[str, float] = Field(
+        ...,
+        description="Rubric axis name → score (0.0-1.0). Keys must match all rubric axes."
+    )
     criteria_met: List[bool]
     reasoning: str

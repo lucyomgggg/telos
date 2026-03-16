@@ -41,6 +41,10 @@ class MemorySettings(BaseModel):
     qdrant_url: str = Field(default="http://localhost:6333", description="Qdrant vector store URL")
     collection_name: str = Field(default="telos_artifacts", description="Name of the Qdrant collection")
     embedding_model: str = Field(default="all-MiniLM-L6-v2", description="Model used for semantic memory")
+    embedding_dimensions: Optional[int] = Field(
+        default=None,
+        description="Vector dimensions for the embedding model. Auto-detected from model name if None."
+    )
     workspace_path: str = Field(default="workspace", description="Path to the agent workspace")
 
 class SandboxSettings(BaseModel):
@@ -68,7 +72,7 @@ class Settings(BaseModel):
     deduplication_threshold: float = Field(default=0.85, description="Similarity threshold for goal deduplication")
     max_steps: int = Field(default=15, description="Maximum steps per loop execution")
     consecutive_error_limit: int = Field(default=3, description="Abort after N consecutive tool errors")
-    max_output_truncation: int = Field(default=10000, description="Truncate tool outputs longer than this")
+    max_output_truncation: int = Field(default=8000, description="Truncate tool outputs longer than this")
 
     @classmethod
     def load(cls) -> "Settings":
@@ -108,6 +112,13 @@ class Settings(BaseModel):
 
 # Global settings instance
 settings = Settings.load()
+
+def reload_settings() -> "Settings":
+    """Bust the settings cache and reload from disk. Useful after config changes."""
+    global _settings_cache
+    _settings_cache = None
+    return Settings.load()
+
 
 def generate_env_example():
     """Create a .env.example file with common providers."""
