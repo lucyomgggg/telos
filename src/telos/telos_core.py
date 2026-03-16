@@ -263,6 +263,10 @@ class Orchestrator:
                     "goal": goal.title,
                     "score": eval_res.get("overall_score", 0.0),
                 })
+            # Fetch cost/tokens written by CostTracker into LoopRecord
+            saved = self.sqlite.get_loop(loop_id)
+            loop_data["cost_usd"] = saved.get("cost_usd", 0.0) if saved else 0.0
+            loop_data["tokens_used"] = saved.get("tokens_used", 0) if saved else 0
             return loop_data
 
         except Exception as e:

@@ -45,37 +45,63 @@ def start(model, loops, verbose):
     click.echo(f"   Mode:  Autonomous ({loops} iterate(s))\n")
     
     agent = AgentLoop()
-    
+
     import os
     PID_FILE.write_text(str(os.getpid()))
+    session_cost = 0.0
     try:
         for i in range(loops):
             click.echo(f"🔄 {click.style(f'Iteration {i+1}/{loops}', bold=True)} {'-'*40}")
-            
+
             # Use a simple "thinking" indicator
             click.echo(f"🤖 {click.style('Agent is thinking...', dim=True)}")
             loop_data = agent.run_iteration()
-            
+
+            loop_cost = loop_data.get("cost_usd", 0.0) or 0.0
+            loop_tokens = loop_data.get("tokens_used", 0) or 0
+            session_cost += loop_cost
+
             # Print elegant summary
             click.echo(f"\n✅ {click.style('Iteration Complete', fg='green', bold=True)}")
             click.echo(f"   {click.style('ID:', dim=True)} {loop_data['id'][:8]}")
             click.echo(f"   {click.style('Goal:', dim=True)} {loop_data['goal']}")
-            
-            score_color = 'green' if loop_data['score'] > 0.7 else 'yellow' if loop_data['score'] > 0.4 else 'red'
-            click.echo(f"   {click.style('Score:', dim=True)} {click.style(f'{loop_data['score']:.2f}', fg=score_color, bold=True)} / 1.0")
-            
+
+            score_val = loop_data['score']
+            score_color = 'green' if score_val > 0.7 else 'yellow' if score_val > 0.4 else 'red'
+            click.echo(f"   {click.style('Score:', dim=True)} {click.style(f'{score_val:.2f}', fg=score_color, bold=True)} / 1.0")
+            click.echo(f"   {click.style('Cost:', dim=True)} ${loop_cost:.4f}  {click.style(f'({loop_tokens:,} tokens)', dim=True)}")
+
             if verbose:
                 click.echo(f"   {click.style('Result:', dim=True)}\n{loop_data['result']}")
             else:
                 summary_line = loop_data['result'].split('\n')[0][:80] + "..."
                 click.echo(f"   {click.style('Result Snapshot:', dim=True)} {summary_line}")
-            
+
             click.echo(f"{'-'*60}\n")
-            
+
     except Exception as e:
         click.echo(f"\n❌ {click.style('Iteration Failed', fg='red', bold=True)}")
         click.echo(f"   Error: {e}")
     finally:
+        # Session cost summary + model breakdown
+        click.echo(f"\n{'='*60}")
+        click.echo(f"💰 {click.style('Session Cost Summary', fg='cyan', bold=True)}")
+        click.echo(f"   {click.style('This session:', dim=True)} ${session_cost:.4f}")
+        try:
+            monthly = agent.cost_tracker.get_monthly_cost()
+            click.echo(f"   {click.style('Month-to-date:', dim=True)} ${monthly:.4f}")
+            stats = agent.sqlite.get_model_cost_stats()
+            if stats:
+                click.echo(f"\n   {click.style('Model Stack Breakdown:', dim=True)}")
+                for s in stats:
+                    click.echo(
+                        f"   {s['model']:<45} [{s['agent_type']:<9}]"
+                        f"  ${s['total_cost']:.4f}  ({s['total_tokens']:>8,} tok)"
+                        f"  avg ${s['avg_cost_per_loop']:.4f}/loop"
+                    )
+        except Exception:
+            pass
+        click.echo(f"{'='*60}\n")
         agent.shutdown()
         PID_FILE.unlink(missing_ok=True)
 
