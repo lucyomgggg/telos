@@ -16,6 +16,21 @@ log = get_logger("llm")
 litellm.telemetry = False
 litellm.drop_params = True
 
+# Apply user-defined cost overrides for models not in litellm's database
+def _apply_cost_overrides():
+    try:
+        overrides = settings.model_cost_overrides
+        for model_id, costs in overrides.items():
+            litellm.model_cost[model_id] = {
+                "input_cost_per_token": costs.get("input_cost_per_million", 0) / 1_000_000,
+                "output_cost_per_token": costs.get("output_cost_per_million", 0) / 1_000_000,
+            }
+            log.debug("Registered custom cost for model '%s'", model_id)
+    except Exception as e:
+        log.warning("Failed to apply model_cost_overrides: %s", e)
+
+_apply_cost_overrides()
+
 T = TypeVar("T", bound=BaseModel)
 
 class LLMService:
@@ -128,6 +143,19 @@ class LLMService:
                     data.update(data.pop("scores"))
                 if "evaluation" in data and isinstance(data["evaluation"], dict):
                     data.update(data.pop("evaluation"))
+
+                # Normalize: if response_model expects a 'scores' dict but LLM returned flat
+                # numeric fields (common — LLMs naturally flatten tool parameters), collect them.
+                if "scores" in response_model.model_fields and "scores" not in data:
+                    known_keys = set(response_model.model_fields.keys()) - {"scores"}
+                    score_candidates = {
+                        k: float(v) for k, v in list(data.items())
+                        if k not in known_keys and isinstance(v, (int, float))
+                    }
+                    if score_candidates:
+                        for k in score_candidates:
+                            data.pop(k)
+                        data["scores"] = score_candidates
 
                 return response_model(**data)
 

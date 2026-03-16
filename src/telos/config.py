@@ -2,7 +2,7 @@ import os
 import yaml
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Dict, Optional
 import logging
 
 # --- Cache ---
@@ -73,6 +73,12 @@ class Settings(BaseModel):
     max_steps: int = Field(default=15, description="Maximum steps per loop execution")
     consecutive_error_limit: int = Field(default=3, description="Abort after N consecutive tool errors")
     max_output_truncation: int = Field(default=8000, description="Truncate tool outputs longer than this")
+    model_cost_overrides: Dict[str, Dict[str, float]] = Field(
+        default_factory=dict,
+        description="Custom per-token costs for models not in litellm's database. "
+                    "Keys are model IDs returned in API responses. "
+                    "Values: {input_cost_per_million: float, output_cost_per_million: float}"
+    )
 
     @classmethod
     def load(cls) -> "Settings":
