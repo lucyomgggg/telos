@@ -31,10 +31,18 @@ class GoalGenerator(BaseAgent):
         similar_text = ""
         if similar:
             similar_text = "\nPast artifacts found in vector memory:\n" + "\n".join(
-                [f"- {s.get('payload', {}).get('goal', 'N/A')}" for s in similar]
+                [f"- {s.get('payload', {}).get('goal', 'N/A')} "
+                 f"(score: {s.get('payload', {}).get('score', '?')})"
+                 for s in similar]
             )
 
-        user_prompt = f"Ambient Intent: {initial_intent}\n\nRecent History:\n{history_text}{similar_text}\n\nDecision: Generate the next goal."
+        user_prompt = (
+            f"Ambient Intent: {initial_intent}\n\n"
+            f"Token Budget: {settings.llm.max_tokens_per_loop} tokens per loop — "
+            f"generate ATOMIC goals (single file, <50 lines) that fit within this budget.\n\n"
+            f"Recent History:\n{history_text}{similar_text}\n\n"
+            f"Decision: Generate the next goal."
+        )
         system_prompt = self.load_template("goal_generation_system", "Generate a new and distinct goal.")
 
         past_titles = [h["goal"] for h in history if h.get("goal")]
@@ -188,12 +196,17 @@ class Orchestrator:
             self.sandbox.start()
 
             # 1. Goal Generation
-            history = self.sqlite.get_recent_history(limit=settings.history_limit)
+            history = self.sqlite.get_quality_history()
             loop_count = self.sqlite.count_loops()
             # Use the most recent goal title as the Qdrant query to avoid intent-bias amplification.
             # The initial_intent acts as a north star in the GoalGenerator prompt; we don't want it
             # to also act as a Qdrant attractor that reinforces the same domain every loop.
-            qdrant_query = history[-1]["goal"] if history else intent
+            recent_scores = [h["score"] for h in history[-3:] if h.get("score") is not None]
+            if len(recent_scores) >= 3 and all(s < settings.failure_threshold for s in recent_scores):
+                log.info("3 consecutive failures detected; escaping domain attractor to initial intent.")
+                qdrant_query = intent
+            else:
+                qdrant_query = history[-1]["goal"] if history else intent
             similar = self.vector.search_similar(qdrant_query, limit=settings.similar_artifacts_limit)
             goal = self.goal_gen.generate(intent, history, similar, loop_count=loop_count)
             # Prefix output_path with the short loop_id to prevent cross-loop file collisions.
@@ -205,13 +218,24 @@ class Orchestrator:
             log.info(f"Starting loop {loop_id}: {goal.title}")
 
             # 2. Execution
-            lessons = [f"Goal '{h['goal']}' failed: {h.get('reasoning', 'No detail')}"
-                       for h in history if h['score'] is not None and h['score'] < settings.failure_threshold]
+            lessons = [
+                f"Goal '{h['goal']}' failed: {h.get('error') or h.get('reasoning', 'No detail')}"
+                for h in history if h['score'] is not None and h['score'] < settings.failure_threshold
+            ]
 
             messages, result = self.producer.execute_goal(loop_id, goal, self.registry, lessons[:settings.max_lessons])
 
-            # 3. Evaluation
-            eval_res = self.critic.evaluate(goal, goal.output_path, self.sandbox, loop_id)
+            # 3. Evaluation — skip Critic for aborted loops
+            if result.startswith("Loop aborted:"):
+                eval_res = {
+                    "overall_score": 0.0,
+                    "breakdown": {},
+                    "criteria_met": [],
+                    "reasoning": result,
+                    "failed": True,
+                }
+            else:
+                eval_res = self.critic.evaluate(goal, goal.output_path, self.sandbox, loop_id)
 
             # 4. Finalize — embed actual artifact content, not the control-flow result string
             artifact_content = result
@@ -233,7 +257,12 @@ class Orchestrator:
                 "messages": messages
             }
             self.sqlite.save_loop(loop_data)
-            self.vector.embed_and_store(artifact_content, {"loop_id": loop_id, "goal": goal.title})
+            if eval_res.get("overall_score", 0.0) > settings.failure_threshold:
+                self.vector.embed_and_store(artifact_content, {
+                    "loop_id": loop_id,
+                    "goal": goal.title,
+                    "score": eval_res.get("overall_score", 0.0),
+                })
             return loop_data
 
         except Exception as e:

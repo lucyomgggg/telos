@@ -275,6 +275,14 @@ def clean(yes):
     
     click.echo(click.style("✨ Cleanup complete.", fg='green', bold=True))
 
+@cli.command()
+def dashboard():
+    """Launch the interactive TUI dashboard."""
+    from .dashboard.tui import TelosDashboard
+    app = TelosDashboard()
+    app.run()
+
+
 def main():
     cli()
 

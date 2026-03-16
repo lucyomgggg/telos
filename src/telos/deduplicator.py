@@ -41,7 +41,7 @@ class GoalDeduplicator:
         would progressively shrink the explorable search space.  Decay rate: -0.0005 per
         loop (100 loops → ~0.80, 200 loops → ~0.75) down to a minimum of `floor`.
         """
-        decay = min(base - floor, loop_count * 0.0005)
+        decay = min(base - floor, loop_count * 0.0002)
         return round(max(floor, base - decay), 4)
 
     def is_duplicate(self, new_goal: str, past_goals: list[str], loop_count: int = 0) -> bool:

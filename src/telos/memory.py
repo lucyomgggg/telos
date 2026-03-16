@@ -120,7 +120,13 @@ class MemoryStore:
             for r in top + failures + recent:
                 if r.id not in seen:
                     seen.add(r.id)
-                    merged.append({"goal": r.goal, "score": r.score, "reasoning": r.reasoning})
+                    merged.append({
+                        "goal": r.goal,
+                        "score": r.score,
+                        "reasoning": r.reasoning,
+                        "error": r.error,
+                        "tokens_used": r.tokens_used,
+                    })
             return merged
         finally:
             session.close()
@@ -132,6 +138,146 @@ class MemoryStore:
         try:
             result = session.query(func.sum(LoopRecord.cost_usd)).filter(LoopRecord.created_at >= since).scalar()
             return float(result or 0.0)
+        finally:
+            session.close()
+
+    def get_score_progression(self, limit: int = 50) -> list[dict]:
+        """Return loops in chronological order with sequence numbers for charting."""
+        session = self.Session()
+        try:
+            records = (session.query(LoopRecord)
+                       .order_by(LoopRecord.created_at.asc())
+                       .limit(limit).all())
+            return [
+                {"loop_number": i + 1, "id": r.id, "goal": r.goal,
+                 "score": r.score if r.score is not None else 0.0,
+                 "status": r.status, "created_at": r.created_at.isoformat()}
+                for i, r in enumerate(records)
+            ]
+        finally:
+            session.close()
+
+    def get_goal_diversity(self, limit: int = 200) -> list[dict]:
+        """Return goals with scores for diversity view."""
+        session = self.Session()
+        try:
+            records = (session.query(LoopRecord)
+                       .order_by(LoopRecord.created_at.desc())
+                       .limit(limit).all())
+            return [
+                {"id": r.id, "goal": r.goal, "score": r.score,
+                 "status": r.status, "created_at": r.created_at.isoformat(),
+                 "success_criteria": (r.goal_detail or {}).get("success_criteria", [])}
+                for r in records
+            ]
+        finally:
+            session.close()
+
+    def get_failure_improvement_pairs(
+        self, failure_threshold: float = 0.3, min_delta: float = 0.2, limit: int = 10
+    ) -> list[dict]:
+        """Return consecutive pairs where a failure is followed by a score improvement."""
+        session = self.Session()
+        try:
+            records = (session.query(LoopRecord)
+                       .order_by(LoopRecord.created_at.asc()).all())
+            pairs = []
+            for i in range(len(records) - 1):
+                curr, nxt = records[i], records[i + 1]
+                if curr.score is None or nxt.score is None:
+                    continue
+                if curr.score <= failure_threshold and nxt.score >= curr.score + min_delta:
+                    reasoning = curr.reasoning or curr.error or ""
+                    lesson = (reasoning.split(".")[0][:120]) or "No reasoning recorded"
+                    pairs.append({
+                        "failure_loop_number": i + 1,
+                        "failure": {
+                            "id": curr.id, "goal": curr.goal, "score": curr.score,
+                            "lesson": lesson, "reasoning": curr.reasoning or "",
+                        },
+                        "improvement": {
+                            "id": nxt.id, "goal": nxt.goal, "score": nxt.score,
+                            "reasoning": nxt.reasoning or "",
+                        },
+                        "score_delta": round(nxt.score - curr.score, 2),
+                    })
+            return pairs[:limit]
+        finally:
+            session.close()
+
+    def get_model_cost_stats(self) -> list[dict]:
+        """Aggregate AuditLog by model and agent_type for cost analysis."""
+        from sqlalchemy import func, distinct
+        from .db_models import AuditLog
+        session = self.Session()
+        try:
+            rows = (session.query(
+                        AuditLog.model,
+                        AuditLog.agent_type,
+                        func.count(distinct(AuditLog.loop_id)).label("loop_count"),
+                        func.sum(AuditLog.cost_usd).label("total_cost"),
+                        func.sum(AuditLog.tokens_used).label("total_tokens"),
+                    )
+                    .filter(AuditLog.loop_id != "system")
+                    .group_by(AuditLog.model, AuditLog.agent_type)
+                    .order_by(func.sum(AuditLog.cost_usd).desc())
+                    .all())
+            result = []
+            for r in rows:
+                lc = r.loop_count or 1
+                result.append({
+                    "model": r.model or "unknown",
+                    "agent_type": r.agent_type or "unknown",
+                    "loop_count": r.loop_count,
+                    "total_cost": float(r.total_cost or 0.0),
+                    "avg_cost_per_loop": float(r.total_cost or 0.0) / lc,
+                    "total_tokens": int(r.total_tokens or 0),
+                    "avg_tokens_per_loop": int(r.total_tokens or 0) // lc,
+                })
+            return result
+        finally:
+            session.close()
+
+    def get_score_breakdown_averages(self) -> dict:
+        """Average each rubric axis across all loops that have score_breakdown data."""
+        session = self.Session()
+        try:
+            records = (session.query(LoopRecord.score_breakdown)
+                       .filter(LoopRecord.score_breakdown.isnot(None)).all())
+            sums: dict = {}
+            counts: dict = {}
+            for (breakdown,) in records:
+                if not isinstance(breakdown, dict):
+                    continue
+                for axis, val in breakdown.items():
+                    if isinstance(val, (int, float)):
+                        sums[axis] = sums.get(axis, 0.0) + val
+                        counts[axis] = counts.get(axis, 0) + 1
+            return {axis: round(sums[axis] / counts[axis], 3) for axis in sums if counts[axis] > 0}
+        finally:
+            session.close()
+
+    def get_dashboard_summary(self) -> dict:
+        """Single-query header stats for the dashboard."""
+        from sqlalchemy import func, case
+        session = self.Session()
+        try:
+            total, avg_score, total_cost, high_count, fail_count = session.query(
+                func.count(LoopRecord.id),
+                func.avg(LoopRecord.score),
+                func.sum(LoopRecord.cost_usd),
+                func.sum(case((LoopRecord.score >= 0.7, 1), else_=0)),
+                func.sum(case((LoopRecord.score <= 0.3, 1), else_=0)),
+            ).one()
+            total = int(total or 0)
+            return {
+                "total_loops": total,
+                "avg_score": round(float(avg_score or 0.0), 3),
+                "total_cost_usd": round(float(total_cost or 0.0), 6),
+                "high_score_count": int(high_count or 0),
+                "failure_count": int(fail_count or 0),
+                "high_score_rate": round(int(high_count or 0) / total * 100, 1) if total > 0 else 0.0,
+            }
         finally:
             session.close()
 
