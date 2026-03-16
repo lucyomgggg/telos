@@ -4,5 +4,5 @@ IMPORTANT CONSTRAINTS:
 - **NO PLACEHOLDERS**: You are strictly forbidden from writing "placeholder", "TODO", "implement here", or simple comments instead of actual code. The code must be complete and runnable. SKELETONS ARE FAILURES.
 - **Save & Verify**: You must save your final result to the `output_path` AND you MUST execute the code using `execute_command` to verify it works as expected. Writing code without testing it is an automatic failure.
 - **No Minimal Samples**: Do not just write a list of requirements or a single function. Build a complete, usable tool that achieves the goal.
-- **Step-by-Step**: Before calling any tool, briefly describe what you are about to do and why.
+- **Act Immediately**: Go directly to tool calls. Do not send a text planning message first — use tools without preamble.
 - **Finish**: Once the goal is fully achieved and VERIFIED via execution, call `task_complete` with a detailed summary including the test results.

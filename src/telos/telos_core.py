@@ -70,7 +70,8 @@ class ProducerAgent(BaseAgent):
         final_result = ""
         consecutive_errors = 0
         total_tokens = 0
-        
+        had_tool_call = False
+
         for step in range(self.settings.max_steps):
             if step > 0:
                 time.sleep(self.settings.rate_limit_delay)
@@ -80,7 +81,7 @@ class ProducerAgent(BaseAgent):
                 messages=messages,
                 loop_id=loop_id
             )
-            
+
             usage = getattr(response, 'usage', None)
             if usage:
                 total_tokens += usage.total_tokens
@@ -93,6 +94,7 @@ class ProducerAgent(BaseAgent):
             messages.append(msg.model_dump())
 
             if msg.tool_calls:
+                had_tool_call = True
                 final_result, consecutive_errors = self._handle_tool_calls(
                     msg.tool_calls, messages, registry, consecutive_errors
                 )
@@ -100,7 +102,10 @@ class ProducerAgent(BaseAgent):
                     break
             else:
                 final_result = msg.content or "Completed."
-                break
+                if had_tool_call:
+                    # Text response after tool use = task is done
+                    break
+                # No tool calls yet: LLM is in planning phase, continue the loop
         
         return messages, final_result or "Loop reached max steps."
 
@@ -151,7 +156,7 @@ class Orchestrator:
 
         # Persistent workspace survives across loops within the same session
         cfg = settings.load()
-        persistent_ws = PROJECT_ROOT / cfg.memory.workspace_path / "persistent"
+        persistent_ws = PROJECT_ROOT / cfg.memory.workspace_path / cfg.memory.persistent_workspace_name
         persistent_ws.mkdir(parents=True, exist_ok=True)
         self.sandbox = SandboxManager(workspace_dir=str(persistent_ws))
         self.registry = ToolRegistry(self.sandbox)
@@ -160,7 +165,9 @@ class Orchestrator:
         self.producer = ProducerAgent(self.cost_tracker)
         self.critic = CriticAgent(cost_tracker=self.cost_tracker)
 
-    def run_iteration(self, intent: str = "Establish existence and evolve.") -> Dict:
+    def run_iteration(self, intent: Optional[str] = None) -> Dict:
+        if intent is None:
+            intent = settings.initial_intent
         loop_id = str(uuid.uuid4())
         _loop_record_created = False
         try:
@@ -168,8 +175,8 @@ class Orchestrator:
             self.sandbox.start()
 
             # 1. Goal Generation
-            history = self.sqlite.get_recent_history(limit=20)
-            similar = self.vector.search_similar(intent, limit=3)
+            history = self.sqlite.get_recent_history(limit=settings.history_limit)
+            similar = self.vector.search_similar(intent, limit=settings.similar_artifacts_limit)
             goal = self.goal_gen.generate(intent, history, similar)
 
             self.sqlite.save_loop({"id": loop_id, "goal": goal.title, "status": "running"})
@@ -178,9 +185,9 @@ class Orchestrator:
 
             # 2. Execution
             lessons = [f"Goal '{h['goal']}' failed: {h.get('reasoning', 'No detail')}"
-                       for h in history if h['score'] is not None and h['score'] < 0.3]
+                       for h in history if h['score'] is not None and h['score'] < settings.failure_threshold]
 
-            messages, result = self.producer.execute_goal(loop_id, goal, self.registry, lessons)
+            messages, result = self.producer.execute_goal(loop_id, goal, self.registry, lessons[:settings.max_lessons])
 
             # 3. Evaluation
             eval_res = self.critic.evaluate(goal, goal.output_path, self.sandbox, loop_id)

@@ -46,6 +46,7 @@ class MemorySettings(BaseModel):
         description="Vector dimensions for the embedding model. Auto-detected from model name if None."
     )
     workspace_path: str = Field(default="workspace", description="Path to the agent workspace")
+    persistent_workspace_name: str = Field(default="persistent", description="Name of the persistent workspace folder")
 
 class SandboxSettings(BaseModel):
     image: str = Field(default="telos-sandbox:latest", description="Docker image for the sandbox")
@@ -66,6 +67,11 @@ class Settings(BaseModel):
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     critic: CriticSettings = Field(default_factory=CriticSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    initial_intent: str = Field(default="Establish existence and evolve.", description="Default ambient intent for the agent")
+    history_limit: int = Field(default=20, description="Max recent loops to consider for context")
+    similar_artifacts_limit: int = Field(default=3, description="Max similar artifacts to retrieve from vector memory")
+    failure_threshold: float = Field(default=0.3, description="Scores below this are considered failures for lesson learning")
+    max_lessons: int = Field(default=2, description="Maximum number of lessons to inject into the producer prompt")
     daily_loop_limit: int = Field(default=10, description="Max loops per day")
     monthly_cost_limit: float = Field(default=50.0, description="Max USD budget per month")
     rate_limit_delay: float = Field(default=6.0, description="Seconds to wait between LLM calls")
