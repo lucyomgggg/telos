@@ -163,7 +163,7 @@ class ProducerAgent(BaseAgent):
             consecutive_errors = (consecutive_errors + 1) if "Error" in result else 0
 
             if consecutive_errors >= self.settings.consecutive_error_limit:
-                final_result = "Loop aborted due to errors."
+                final_result = "Loop aborted: Consecutive tool errors exceeded limit."
                 break
         return final_result, consecutive_errors
 

@@ -108,6 +108,9 @@ telos/
         │      └─ 最大15ステップのツール使用ループ
         │
         ├─ 6. 評価 (CriticAgent.evaluate)  ← 詳細は §4.4
+        │      ├─ [スキップ条件] result が "Loop aborted:" で始まる場合
+        │      │    └─ score=0.0・failed=True を直接セットしてCriticを呼ばない
+        │      │       （現状: トークン上限超過のみ該当）
         │      ├─ サンドボックスからアーティファクト読み取り
         │      ├─ rubric.jsonの軸をプロンプトに動的注入
         │      └─ 重み付きスコア算出 (0.0〜1.0)
@@ -115,7 +118,9 @@ telos/
         ├─ 7. コスト記録 (CostTracker.record_usage)
         │
         ├─ 8. ベクトル保存 (VectorStore.embed_and_store)
+        │      ├─ score > failure_threshold の場合のみ実行
         │      └─ アーティファクト内容をQdrantに埋め込み保存
+        │         （アボート・低スコアループはQdrantに保存されない）
         │
         └─ 9. SQLiteにloop最終状態で保存
 ```
@@ -232,8 +237,8 @@ DeepSeekなど一部のLLMは最初のステップでツールを呼ばずテキ
 | `task_complete` ツール呼び出し | 正常完了 |
 | ツール使用後にテキスト応答 | 正常完了とみなす |
 | 最大ステップ数（15）到達 | タイムアウト |
-| 連続エラー3回 | エラー終了 |
-| トークン上限超過 | アボート |
+| 連続エラー3回 | アボート（Criticスキップ） |
+| トークン上限超過 | アボート（Criticスキップ） |
 
 #### ツール出力の切り詰め (`_truncate_tool_output`)
 
@@ -291,6 +296,24 @@ overall_score = sum(
 ```
 
 評価失敗時（例外）: `score=0.0`, `failed=True` を返し、ループ記録に `failed` フラグが立つ。
+
+#### Critic スキップ条件
+
+`Orchestrator.run_iteration` はProducer実行結果の文字列を検査し、`"Loop aborted:"` で始まる場合はCriticを呼ばずスコアを直接セットする：
+
+```python
+if result.startswith("Loop aborted:"):
+    eval_res = {"overall_score": 0.0, "breakdown": {}, "failed": True, "reasoning": result}
+else:
+    eval_res = self.critic.evaluate(...)
+```
+
+| 終了状態 | result文字列 | Critic呼び出し |
+|---|---|---|
+| トークン上限超過 | `"Loop aborted: Exceeded token limit."` | **スキップ** |
+| 連続エラー上限 | `"Loop aborted: Consecutive tool errors exceeded limit."` | **スキップ** |
+| 最大ステップ到達 | `"Loop reached max steps."` | 呼ばれる |
+| 正常完了 | `"TASK_COMPLETE: ..."` | 呼ばれる |
 
 ---
 
