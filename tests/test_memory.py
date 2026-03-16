@@ -1,6 +1,5 @@
 import pytest
 import tempfile
-import os
 from telos.memory import MemoryStore, VectorStore
 
 
@@ -83,14 +82,14 @@ class TestMemoryStore:
 class TestVectorStore:
     def test_graceful_unavailable(self):
         """VectorStore should not crash when Qdrant is unavailable."""
-        # Point to a non-existent Qdrant instance
-        os.environ["QDRANT_URL"] = "http://localhost:19999"
-        vs = VectorStore()
+        from unittest.mock import patch
+        # Force QdrantClient to raise on ping so we test the fallback path
+        with patch("telos.memory.QdrantClient") as MockClient:
+            MockClient.return_value.get_collections.side_effect = ConnectionRefusedError("no qdrant")
+            vs = VectorStore()
+
         assert vs.available is False
-        
+
         # Operations should return gracefully
         assert vs.embed_and_store("test text") is None
         assert vs.search_similar("test query") == []
-        
-        # Clean up
-        del os.environ["QDRANT_URL"]

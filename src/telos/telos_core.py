@@ -14,6 +14,8 @@ from .schemas import GoalSchema
 from .interfaces import Tool, Critic, TemplateLoader
 from .agents import BaseAgent
 from .tools import ToolRegistry
+from .sandbox import SandboxManager
+from .critic import CriticAgent
 
 log = get_logger("core")
 
@@ -133,13 +135,17 @@ class ProducerAgent(BaseAgent):
 
 class Orchestrator:
     def __init__(self):
-        from .sandbox import SandboxManager
-        from .critic import CriticAgent
-        
+        from .config import PROJECT_ROOT
+
         self.sqlite = MemoryStore()
         self.vector = VectorStore()
         self.cost_tracker = CostTracker(self.sqlite)
-        self.sandbox = SandboxManager()
+
+        # Persistent workspace survives across loops within the same session
+        cfg = settings.load()
+        persistent_ws = PROJECT_ROOT / cfg.memory.workspace_path / "persistent"
+        persistent_ws.mkdir(parents=True, exist_ok=True)
+        self.sandbox = SandboxManager(workspace_dir=str(persistent_ws))
         self.registry = ToolRegistry(self.sandbox)
         
         self.goal_gen = GoalGenerator(self.cost_tracker)
@@ -148,28 +154,37 @@ class Orchestrator:
 
     def run_iteration(self, intent: str = "Establish existence and evolve.") -> Dict:
         loop_id = str(uuid.uuid4())
+        _loop_record_created = False
         try:
             self._check_safety()
             self.sandbox.start()
-            
+
             # 1. Goal Generation
             history = self.sqlite.get_recent_history(limit=20)
             similar = self.vector.search_similar(intent, limit=3)
             goal = self.goal_gen.generate(intent, history, similar)
-            
+
             self.sqlite.save_loop({"id": loop_id, "goal": goal.title, "status": "running"})
+            _loop_record_created = True
             log.info(f"Starting loop {loop_id}: {goal.title}")
 
             # 2. Execution
-            lessons = [f"Goal '{h['goal']}' failed: {h.get('reasoning', 'No detail')}" 
+            lessons = [f"Goal '{h['goal']}' failed: {h.get('reasoning', 'No detail')}"
                        for h in history if h['score'] is not None and h['score'] < 0.3]
-            
+
             messages, result = self.producer.execute_goal(loop_id, goal, self.registry, lessons)
 
             # 3. Evaluation
             eval_res = self.critic.evaluate(goal, goal.output_path, self.sandbox, loop_id)
-            
-            # 4. Finalize
+
+            # 4. Finalize — embed actual artifact content, not the control-flow result string
+            artifact_content = result
+            if goal.output_path:
+                try:
+                    artifact_content = self.sandbox.read_file(goal.output_path)
+                except Exception:
+                    pass  # keep result string as fallback
+
             loop_data = {
                 "id": loop_id,
                 "goal": goal.title,
@@ -182,11 +197,20 @@ class Orchestrator:
                 "messages": messages
             }
             self.sqlite.save_loop(loop_data)
-            self.vector.embed_and_store(result, {"loop_id": loop_id, "goal": goal.title})
+            self.vector.embed_and_store(artifact_content, {"loop_id": loop_id, "goal": goal.title})
             return loop_data
 
+        except Exception as e:
+            log.error(f"Loop {loop_id} failed with exception: {e}")
+            if _loop_record_created:
+                try:
+                    self.sqlite.save_loop({"id": loop_id, "status": "failed", "error": str(e)})
+                except Exception:
+                    pass
+            raise
+
         finally:
-            self.sandbox.stop()
+            self.sandbox.stop(cleanup=False)
 
     def _check_safety(self):
         curr = settings.load()
@@ -194,6 +218,13 @@ class Orchestrator:
             raise RuntimeError("Daily loop limit reached.")
         if self.cost_tracker.get_monthly_cost() >= curr.monthly_cost_limit:
             raise RuntimeError("Monthly budget exceeded.")
+
+    def shutdown(self):
+        """Clean up the persistent workspace. Call once when the session is done."""
+        import shutil
+        if self.sandbox.local_workspace.exists():
+            shutil.rmtree(self.sandbox.local_workspace)
+            log.info("Persistent workspace cleaned up.")
 
 class AgentLoop(Orchestrator):
     """Legacy wrapper for CLI compatibility."""

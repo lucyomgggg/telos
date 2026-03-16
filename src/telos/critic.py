@@ -66,7 +66,8 @@ class CriticAgent(BaseAgent):
             scores = {
                 "completeness": response.completeness,
                 "coherence": response.coherence,
-                "novelty": response.novelty
+                "novelty": response.novelty,
+                "performance": response.performance,
             }
             
             for axis in self.rubric["axes"]:

@@ -42,8 +42,8 @@ class CostTracker:
             # Update the LoopRecord's aggregate cost if it exists
             record = session.query(LoopRecord).filter_by(id=loop_id).first()
             if record:
-                record.cost_usd += cost
-                record.tokens_used += tokens
+                record.cost_usd = (record.cost_usd or 0.0) + cost
+                record.tokens_used = (record.tokens_used or 0) + tokens
             
             session.commit()
             log.debug(f"Recorded cost: ${cost:.6f} for {agent_type} using {model}")

@@ -1,19 +1,24 @@
 {
     "axes": [
         {
-            "name": "novelty",
-            "weight": 0.4,
-            "description": "Is this approach/result novel compared to previous iterations?"
-        },
-        {
             "name": "completeness",
             "weight": 0.4,
-            "description": "Is the artifact complete and functional as requested?"
+            "description": "True if all requirements are met and no placeholders remain."
         },
         {
             "name": "coherence",
             "weight": 0.2,
-            "description": "Does the artifact match the original goal?"
+            "description": "Logical consistency and code quality."
+        },
+        {
+            "name": "novelty",
+            "weight": 0.2,
+            "description": "New capabilities or significant improvements compared to history."
+        },
+        {
+            "name": "performance",
+            "weight": 0.2,
+            "description": "Efficiency of resource usage, concurrency safety (thread-safe), and low CPU/memory overhead."
         }
     ]
 }

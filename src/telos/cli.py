@@ -76,6 +76,7 @@ def start(model, loops, verbose):
         click.echo(f"\n❌ {click.style('Iteration Failed', fg='red', bold=True)}")
         click.echo(f"   Error: {e}")
     finally:
+        agent.shutdown()
         PID_FILE.unlink(missing_ok=True)
 
 @cli.command()

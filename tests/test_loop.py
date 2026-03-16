@@ -1,23 +1,57 @@
 import pytest
-import json
+from unittest.mock import patch
 from src.telos.telos_core import AgentLoop
 
-class TestAgentLoopExecution:
-    """Test AgentLoop methods."""
 
-    def test_finalize_minimal(self, mocker):
-        # We need to mock storage and critic to test finalize_iteration
-        storage = mocker.Mock()
-        critic = mocker.Mock()
-        critic.evaluate.return_value = {"overall_score": 0.8, "breakdown": {}}
-        
-        loop = AgentLoop(storage=storage, critic=critic)
-        goal = mocker.Mock()
-        goal.title = "Test Goal"
-        goal.output_path = "test.txt"
-        goal.model_dump.return_value = {}
-        
-        res = loop._finalize_iteration("test-id", goal, [], "Final result")
-        assert res["status"] == "completed"
-        assert res["score"] == 0.8
-        storage.sqlite.save_loop.assert_called()
+class TestAgentLoopExecution:
+    """Test AgentLoop run_iteration orchestration."""
+
+    def test_run_iteration_saves_loop_on_failure(self):
+        """If an exception occurs mid-run, LoopRecord should be saved as 'failed'."""
+        with patch("src.telos.telos_core.MemoryStore"), \
+             patch("src.telos.telos_core.VectorStore"), \
+             patch("src.telos.telos_core.SandboxManager"), \
+             patch("src.telos.telos_core.ToolRegistry"), \
+             patch("src.telos.telos_core.GoalGenerator"), \
+             patch("src.telos.telos_core.ProducerAgent"), \
+             patch("src.telos.telos_core.CriticAgent"):
+
+            loop = AgentLoop()
+            mock_sqlite = loop.sqlite
+
+            # get_loop returns a record (simulating loop was saved as "running")
+            mock_sqlite.get_loop.return_value = {"id": "abc", "status": "running"}
+
+            # Raise after the loop record is created (during producer execution)
+            loop.producer.execute_goal.side_effect = RuntimeError("producer boom")
+
+            with pytest.raises(RuntimeError, match="producer boom"):
+                loop.run_iteration("test intent")
+
+            # LoopRecord should have been updated to "failed"
+            save_calls = mock_sqlite.save_loop.call_args_list
+            failed_call = next(
+                (c for c in save_calls if c.args[0].get("status") == "failed"),
+                None
+            )
+            assert failed_call is not None, "Expected save_loop to be called with status='failed'"
+
+    def test_run_iteration_shutdown_clears_workspace(self, tmp_path):
+        """shutdown() should remove the persistent workspace."""
+        with patch("src.telos.telos_core.MemoryStore"), \
+             patch("src.telos.telos_core.VectorStore"), \
+             patch("src.telos.telos_core.SandboxManager"), \
+             patch("src.telos.telos_core.ToolRegistry"), \
+             patch("src.telos.telos_core.GoalGenerator"), \
+             patch("src.telos.telos_core.ProducerAgent"), \
+             patch("src.telos.telos_core.CriticAgent"):
+
+            loop = AgentLoop()
+            # Point workspace to tmp_path so we can verify deletion
+            loop.sandbox.local_workspace = tmp_path / "persistent"
+            loop.sandbox.local_workspace.mkdir()
+            (loop.sandbox.local_workspace / "artifact.txt").write_text("hello")
+
+            loop.shutdown()
+
+            assert not loop.sandbox.local_workspace.exists()

@@ -148,7 +148,7 @@ class LLMService:
         is_retryable = is_rate_limit or any(kw in error_str for kw in ["timeout", "503", "500"])
         
         if is_retryable and attempt < max_retries:
-            wait = (2 ** (attempt - 1)) * 5
+            wait = min((2 ** (attempt - 1)) * 5, 60)
             if is_rate_limit:
                 wait += 10
                 log.warning("Rate limit (429) hit (attempt %d/%d), waiting %ds: %s", attempt, max_retries, wait, e)

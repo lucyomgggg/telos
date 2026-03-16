@@ -46,7 +46,7 @@ class TestLocalSandbox:
     def test_execute_command_timeout(self, sandbox):
         result = sandbox.execute_command("sleep 10", timeout=1)
         assert result["exit_code"] == 124
-        assert "timed out" in result["output"].lower()
+        assert "timeout" in result["output"].lower()
 
     def test_write_overwrites_existing(self, sandbox):
         sandbox.write_file("overwrite.txt", "first")

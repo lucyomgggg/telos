@@ -65,7 +65,7 @@ class MemoryStore:
         session = self.Session()
         try:
             records = session.query(LoopRecord).order_by(LoopRecord.created_at.desc()).limit(limit).all()
-            return [{"goal": r.goal, "score": r.score} for r in records][::-1]  # Return in chronological order
+            return [{"goal": r.goal, "score": r.score, "reasoning": r.reasoning} for r in records][::-1]  # Return in chronological order
         finally:
             session.close()
 

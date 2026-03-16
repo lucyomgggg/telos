@@ -10,5 +10,6 @@ class EvaluationResponse(BaseModel):
     completeness: float = Field(..., ge=0, le=1)
     coherence: float = Field(..., ge=0, le=1)
     novelty: float = Field(..., ge=0, le=1)
+    performance: float = Field(..., ge=0, le=1)
     criteria_met: List[bool]
     reasoning: str

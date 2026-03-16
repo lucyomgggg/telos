@@ -35,7 +35,7 @@ class LLMSettings(BaseModel):
     producer_model: str = Field(default="gemini/gemini-flash-latest", description="Model for the Producer agent")
     critic_model: str = Field(default="gemini/gemini-flash-latest", description="Model for the Critic agent")
     goal_gen_model: Optional[str] = Field(default=None, description="Dedicated model for goal generation (falls back to producer_model if None)")
-    max_tokens_per_loop: int = Field(default=100000, description="Token limit per loop iteration")
+    max_tokens_per_loop: int = Field(default=8000, description="Token limit per loop iteration")
 
 class MemorySettings(BaseModel):
     qdrant_url: str = Field(default="http://localhost:6333", description="Qdrant vector store URL")
@@ -65,10 +65,10 @@ class Settings(BaseModel):
     daily_loop_limit: int = Field(default=10, description="Max loops per day")
     monthly_cost_limit: float = Field(default=50.0, description="Max USD budget per month")
     rate_limit_delay: float = Field(default=6.0, description="Seconds to wait between LLM calls")
-    deduplication_threshold: float = Field(default=0.9, description="Similarity threshold for goal deduplication")
+    deduplication_threshold: float = Field(default=0.85, description="Similarity threshold for goal deduplication")
     max_steps: int = Field(default=15, description="Maximum steps per loop execution")
     consecutive_error_limit: int = Field(default=3, description="Abort after N consecutive tool errors")
-    max_output_truncation: int = Field(default=1000, description="Truncate tool outputs longer than this")
+    max_output_truncation: int = Field(default=10000, description="Truncate tool outputs longer than this")
 
     @classmethod
     def load(cls) -> "Settings":

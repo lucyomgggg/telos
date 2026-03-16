@@ -1,5 +1,6 @@
 import logging
 import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from .config import TELOS_HOME
 
@@ -27,15 +28,15 @@ def get_logger(name: str) -> logging.Logger:
     console.setFormatter(formatter)
     logger.addHandler(console)
 
-    # File handler (DEBUG+)
+    # File handler (DEBUG+, 10MB x 5 rotations = 50MB max)
     try:
         LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(str(LOG_FILE))
+        file_handler = RotatingFileHandler(str(LOG_FILE), maxBytes=10 * 1024 * 1024, backupCount=5)
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
-    except (PermissionError, OSError):
-        logger.warning("Could not create log file at %s", LOG_FILE)
+    except (PermissionError, OSError) as e:
+        logger.warning("Could not create log file at %s: %s", LOG_FILE, e)
 
     # Suppress verbose third-party logs
     logging.getLogger("litellm").setLevel(logging.WARNING)

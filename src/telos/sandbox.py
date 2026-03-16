@@ -68,7 +68,7 @@ class DockerSandboxStrategy(SandboxStrategy):
             except Exception as e:
                 result_container.append(e)
 
-        thread = threading.Thread(target=run_command)
+        thread = threading.Thread(target=run_command, daemon=True)
         thread.start()
         thread.join(timeout=timeout)
         if thread.is_alive(): return {"exit_code": 124, "output": "Timeout"}
@@ -132,7 +132,7 @@ class LocalSandboxStrategy(SandboxStrategy):
         with open(full_path, "r") as f: return f.read()
 
 class SandboxManager:
-    def __init__(self, image_name=None, container_name=None):
+    def __init__(self, image_name=None, container_name=None, workspace_dir=None):
         from .config import settings, PROJECT_ROOT
         self.settings = settings.load()
         self.image_name = image_name or self.settings.sandbox.image
@@ -140,10 +140,15 @@ class SandboxManager:
         self.use_docker = self.settings.sandbox.use_docker
         self._base_workspace = PROJECT_ROOT / self.settings.memory.workspace_path
         self._base_workspace.mkdir(exist_ok=True)
-        import uuid
-        self.local_workspace = self._base_workspace / f"run_{uuid.uuid4().hex[:8]}"
-        self.local_workspace.mkdir(exist_ok=True)
+        if workspace_dir:
+            self.local_workspace = Path(workspace_dir)
+        else:
+            import uuid
+            self.local_workspace = self._base_workspace / f"run_{uuid.uuid4().hex[:8]}"
+        self.local_workspace.mkdir(parents=True, exist_ok=True)
         self.cmd_timeout = self.settings.sandbox.timeout
+
+        self._started = False
 
         if self.use_docker:
             try:
@@ -157,12 +162,19 @@ class SandboxManager:
             self.strategy = LocalSandboxStrategy(self.local_workspace)
             log.info("Local sandbox strategy initialized.")
 
-    def start(self): return self.strategy.start()
-    def stop(self):
+    def start(self):
+        result = self.strategy.start()
+        self._started = True
+        return result
+
+    def stop(self, cleanup: bool = True):
+        if not self._started:
+            return
         self.strategy.stop()
-        if self.local_workspace.exists():
+        if cleanup and self.local_workspace.exists():
             import shutil
             shutil.rmtree(self.local_workspace)
+        self._started = False
 
     def execute_command(self, command: str, timeout: int = None) -> dict:
         return self.strategy.execute(command, timeout or self.cmd_timeout)
