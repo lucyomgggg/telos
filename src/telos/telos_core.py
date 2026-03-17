@@ -8,6 +8,7 @@ from typing import List, Optional, Any, Dict, Tuple
 from .config import settings, TELOS_HOME
 from .logger import get_logger
 from .memory import MemoryStore, VectorStore
+from .db_models import SessionRecord
 from .llm import LLMService
 from .usage import CostTracker
 from .schemas import GoalSchema
@@ -168,7 +169,7 @@ class ProducerAgent(BaseAgent):
         return final_result, consecutive_errors
 
 class Orchestrator:
-    def __init__(self):
+    def __init__(self, session_name: Optional[str] = None, intended_loops: int = 1):
         from .config import PROJECT_ROOT
 
         self.sqlite = MemoryStore()
@@ -181,10 +182,25 @@ class Orchestrator:
         persistent_ws.mkdir(parents=True, exist_ok=True)
         self.sandbox = SandboxManager(workspace_dir=str(persistent_ws))
         self.registry = ToolRegistry(self.sandbox)
-        
+
         self.goal_gen = GoalGenerator(self.cost_tracker)
         self.producer = ProducerAgent(self.cost_tracker)
         self.critic = CriticAgent(cost_tracker=self.cost_tracker)
+
+        # Create session record
+        self.session_id = str(uuid.uuid4())
+        session_ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        session_rec = SessionRecord(
+            id=self.session_id,
+            name=session_name or f"session-{session_ts}",
+            producer_model=cfg.llm.producer_model,
+            critic_model=cfg.llm.critic_model,
+            goal_gen_model=cfg.llm.goal_gen_model,
+            intended_loops=intended_loops,
+            status="running",
+        )
+        self.sqlite.create_session(session_rec)
+        log.info("Session %s started: %s", self.session_id[:8], session_rec.name)
 
     def run_iteration(self, intent: Optional[str] = None) -> Dict:
         if intent is None:
@@ -213,7 +229,7 @@ class Orchestrator:
             if goal.output_path and not goal.output_path.startswith(loop_id[:8]):
                 goal.output_path = f"{loop_id[:8]}/{goal.output_path}"
 
-            self.sqlite.save_loop({"id": loop_id, "goal": goal.title, "status": "running"})
+            self.sqlite.save_loop({"id": loop_id, "goal": goal.title, "status": "running", "session_id": self.session_id})
             _loop_record_created = True
             log.info(f"Starting loop {loop_id}: {goal.title}")
 
@@ -254,7 +270,8 @@ class Orchestrator:
                 "score_breakdown": eval_res.get("breakdown", {}),
                 "reasoning": eval_res.get("reasoning", ""),
                 "result": result,
-                "messages": messages
+                "messages": messages,
+                "session_id": self.session_id,
             }
             self.sqlite.save_loop(loop_data)
             if eval_res.get("overall_score", 0.0) > settings.failure_threshold:
@@ -289,8 +306,26 @@ class Orchestrator:
             raise RuntimeError("Monthly budget exceeded.")
 
     def shutdown(self):
-        """Clean up the persistent workspace. Call once when the session is done."""
+        """Clean up the persistent workspace and finalize session. Call once when done."""
         import shutil
+        try:
+            loops = self.sqlite.list_loops_by_session(self.session_id)
+            completed = [l for l in loops if l["status"] in ("completed", "failed")]
+            scores = [l["score"] for l in completed if l.get("score") is not None]
+            total_cost = sum(l.get("cost_usd") or 0.0 for l in loops)
+            self.sqlite.update_session(
+                self.session_id,
+                status="completed",
+                completed_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                completed_loops=len(completed),
+                total_cost_usd=round(total_cost, 6),
+                avg_score=round(sum(scores) / len(scores), 4) if scores else None,
+            )
+            log.info("Session %s finalized: %d loops, avg_score=%s",
+                     self.session_id[:8], len(completed),
+                     round(sum(scores) / len(scores), 4) if scores else "N/A")
+        except Exception as e:
+            log.warning("Could not finalize session stats: %s", e)
         if self.sandbox.local_workspace.exists():
             shutil.rmtree(self.sandbox.local_workspace)
             log.info("Persistent workspace cleaned up.")

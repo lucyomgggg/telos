@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from .config import TELOS_HOME, settings
-from .db_models import Base, LoopRecord
+from .db_models import Base, LoopRecord, SessionRecord
 from .logger import get_logger
 
 log = get_logger("memory")
@@ -256,6 +256,105 @@ class MemoryStore:
             return {axis: round(sums[axis] / counts[axis], 3) for axis in sums if counts[axis] > 0}
         finally:
             session.close()
+
+    # --- Session management ---
+
+    def create_session(self, session_record: SessionRecord) -> None:
+        db = self.Session()
+        try:
+            db.add(session_record)
+            db.commit()
+            log.debug("Created session %s (%s)", session_record.id[:8], session_record.name)
+        except Exception as e:
+            db.rollback()
+            log.error("Error creating session: %s", e)
+            raise
+        finally:
+            db.close()
+
+    def update_session(self, session_id: str, **kwargs) -> None:
+        db = self.Session()
+        try:
+            record = db.query(SessionRecord).filter_by(id=session_id).first()
+            if record:
+                for key, value in kwargs.items():
+                    setattr(record, key, value)
+                db.commit()
+        except Exception as e:
+            db.rollback()
+            log.error("Error updating session %s: %s", session_id[:8], e)
+        finally:
+            db.close()
+
+    def get_session(self, session_id: str) -> dict:
+        db = self.Session()
+        try:
+            record = db.query(SessionRecord).filter_by(id=session_id).first()
+            if not record and len(session_id) < 36:
+                # Support 8-char short IDs
+                record = (db.query(SessionRecord)
+                          .filter(SessionRecord.id.like(f"{session_id}%"))
+                          .order_by(SessionRecord.created_at.desc())
+                          .first())
+            return record.to_dict() if record else None
+        finally:
+            db.close()
+
+    def list_sessions(self, limit: int = 20) -> list:
+        db = self.Session()
+        try:
+            records = (db.query(SessionRecord)
+                       .order_by(SessionRecord.created_at.desc())
+                       .limit(limit).all())
+            return [r.to_dict() for r in records]
+        finally:
+            db.close()
+
+    def list_loops_by_session(self, session_id: str) -> list:
+        db = self.Session()
+        try:
+            records = (db.query(LoopRecord)
+                       .filter(LoopRecord.session_id == session_id)
+                       .order_by(LoopRecord.created_at.asc())
+                       .all())
+            return [r.to_dict() for r in records]
+        finally:
+            db.close()
+
+    def export_session_json(self, session_id: str) -> dict:
+        db = self.Session()
+        try:
+            session_rec = db.query(SessionRecord).filter_by(id=session_id).first()
+            if not session_rec:
+                return {}
+            loops = (db.query(LoopRecord)
+                     .filter(LoopRecord.session_id == session_id)
+                     .order_by(LoopRecord.created_at.asc())
+                     .all())
+            return {
+                "session": session_rec.to_dict(),
+                "loops": [r.to_dict() for r in loops],
+            }
+        finally:
+            db.close()
+
+    def export_session_csv(self, session_id: str) -> str:
+        import csv
+        import io
+        data = self.export_session_json(session_id)
+        if not data:
+            return ""
+        buf = io.StringIO()
+        for k, v in data["session"].items():
+            buf.write(f"# {k}: {v}\n")
+        loops = data["loops"]
+        if loops:
+            fieldnames = [f for f in loops[0].keys() if f not in ("result", "messages", "score_breakdown")]
+            writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction='ignore')
+            writer.writeheader()
+            for row in loops:
+                writer.writerow(row)
+        return buf.getvalue()
 
     def get_dashboard_summary(self) -> dict:
         """Single-query header stats for the dashboard."""

@@ -34,17 +34,18 @@ def init(force):
 @click.option('--model', help='The LLM model to use (default from config.yaml)')
 @click.option('--loops', default=1, type=int, help='Number of loops to run (default: 1)')
 @click.option('--verbose', is_flag=True, help='Show full results in terminal.')
-def start(model, loops, verbose):
+@click.option('--name', default=None, help='Optional name for this session.')
+def start(model, loops, verbose, name):
     """Start the autonomous loop."""
     from .telos_core import AgentLoop
     from .config import PID_FILE
-    
+
     selected_model = model or settings.llm.producer_model
     click.echo(f"✨ {click.style('Telos Initiated', fg='cyan', bold=True)}")
     click.echo(f"   Model: {click.style(selected_model, fg='white')}")
     click.echo(f"   Mode:  Autonomous ({loops} iterate(s))\n")
-    
-    agent = AgentLoop()
+
+    agent = AgentLoop(session_name=name, intended_loops=loops)
 
     import os
     PID_FILE.write_text(str(os.getpid()))
@@ -437,6 +438,83 @@ def clean(yes):
         click.echo("🧹 logs cleared.")
     
     click.echo(click.style("✨ Cleanup complete.", fg='green', bold=True))
+
+@cli.command()
+@click.option('--limit', default=20, help='Number of sessions to show.')
+def sessions(limit):
+    """List recent sessions with model and performance summary."""
+    from .memory import MemoryStore
+    store = MemoryStore()
+    rows = store.list_sessions(limit=limit)
+    if not rows:
+        click.echo(click.style("No sessions recorded yet. Run 'telos start' to begin.", dim=True))
+        return
+    click.echo(f"\n{click.style('SESSION HISTORY', fg='cyan', bold=True)}")
+    header = f"{'ID':<10}  {'Name':<28}  {'Status':<10}  {'Loops':>7}  {'Score':>6}  {'Cost':>8}  Model"
+    click.echo(click.style(header, dim=True))
+    click.echo(click.style("-" * 100, dim=True))
+    for s in rows:
+        sid = s['id'][:8]
+        name = (s['name'] or '')[:28]
+        status = s['status']
+        status_color = 'green' if status == 'completed' else 'yellow' if status == 'running' else 'red'
+        status_str = click.style(f"{status:<10}", fg=status_color)
+        loops_str = f"{s['completed_loops']}/{s['intended_loops']}"
+        avg = f"{s['avg_score']:.2f}" if s['avg_score'] is not None else "  N/A"
+        cost = f"${s['total_cost_usd']:.4f}"
+        model_str = (s.get('producer_model') or '')[:35]
+        click.echo(f"{sid:<10}  {name:<28}  {status_str}  {loops_str:>7}  {avg:>6}  {cost:>8}  {model_str}")
+    click.echo("")
+
+
+@cli.command()
+@click.argument("session_id", required=False)
+@click.option("--format", "fmt", type=click.Choice(["json", "csv"]), default="json",
+              help="Output format (default: json).")
+@click.option("--output", "-o", default=None, help="Output file path. Defaults to session_<id>.json/csv in cwd.")
+def export(session_id, fmt, output):
+    """Export session data as JSON or CSV.
+
+    If SESSION_ID is omitted, exports the latest session.
+    SESSION_ID can be the full UUID or just the first 8 characters.
+    """
+    import json as _json
+    from .memory import MemoryStore
+    store = MemoryStore()
+
+    if not session_id:
+        latest = store.list_sessions(limit=1)
+        if not latest:
+            click.echo(click.style("No sessions found.", fg='yellow'))
+            return
+        session_id = latest[0]['id']
+        click.echo(click.style(f"Exporting latest session: {session_id[:8]}", dim=True), err=True)
+    else:
+        # Resolve short (8-char) IDs to full UUID via get_session
+        resolved = store.get_session(session_id)
+        if not resolved:
+            click.echo(click.style(f"Session '{session_id}' not found.", fg='red'))
+            return
+        session_id = resolved['id']
+
+    if fmt == "json":
+        data = store.export_session_json(session_id)
+        if not data:
+            click.echo(click.style(f"Session {session_id[:8]} not found.", fg='red'))
+            return
+        content = _json.dumps(data, indent=2, default=str)
+        default_filename = f"session_{session_id[:8]}.json"
+    else:
+        content = store.export_session_csv(session_id)
+        if not content:
+            click.echo(click.style(f"Session {session_id[:8]} not found.", fg='red'))
+            return
+        default_filename = f"session_{session_id[:8]}.csv"
+
+    out_path = Path(output) if output else Path(default_filename)
+    out_path.write_text(content)
+    click.echo(click.style(f"Exported to {out_path}", fg='green'))
+
 
 @cli.command()
 def dashboard():
