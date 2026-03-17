@@ -232,48 +232,185 @@ def show(loop_id, explain):
         click.echo(f"{click.style('═' * 80, fg='cyan')}\n")
 
 @cli.command()
-@click.option("--limit", default=5, help="Number of loops to include.")
 @click.option("--output", "-o", default="REPORT.md", help="Path to save the report.")
-def report(limit, output):
-    """Generate a Markdown execution report."""
+@click.option("--top", default=5, help="Number of top-performing loops to highlight.")
+def report(output, top):
+    """Generate a comprehensive Markdown report of all loop activity."""
     from .memory import MemoryStore
     store = MemoryStore()
-    loops = store.list_loops(limit=limit)
-    
-    if not loops:
+
+    summary = store.get_dashboard_summary()
+    if summary["total_loops"] == 0:
         click.echo(click.style("No loops found to report.", fg='yellow'))
         return
 
-    content = [
-        f"# 🤖 Telos Execution Report",
-        f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
-        "## 🔄 Recent Activity",
-        "| ID | Created | Goal | Score | Status |",
+    progression = store.get_score_progression(limit=500)
+    breakdown_avgs = store.get_score_breakdown_averages()
+    all_goals = store.get_goal_diversity(limit=500)
+    learning_pairs = store.get_failure_improvement_pairs(limit=10)
+    cost_stats = store.get_model_cost_stats()
+
+    s = summary
+    lines = [
+        "# Telos Execution Report",
+        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ",
+        f"Initial intent: *{settings.initial_intent}*",
+        "",
+        "---",
+        "",
+        "## Summary",
+        "",
+        "| Metric | Value |",
+        "|---|---|",
+        f"| Total loops | {s['total_loops']} |",
+        f"| Average score | {s['avg_score']:.3f} |",
+        f"| High score rate (≥ 0.7) | {s['high_score_rate']}% ({s['high_score_count']} loops) |",
+        f"| Failures (≤ 0.3) | {s['failure_count']} loops |",
+        f"| Total cost | ${s['total_cost_usd']:.4f} |",
+        "",
+    ]
+
+    # Score progression table
+    lines += [
+        "---",
+        "",
+        "## Score Progression",
+        "",
+        "| # | Goal | Score | Status |",
+        "|---|---|---|---|",
+    ]
+    for p in progression:
+        score_str = f"{p['score']:.2f}"
+        goal_short = (p['goal'][:70] + "…") if len(p['goal']) > 70 else p['goal']
+        lines.append(f"| {p['loop_number']} | {goal_short} | {score_str} | {p['status']} |")
+    lines.append("")
+
+    # Rubric axis breakdown
+    if breakdown_avgs:
+        lines += [
+            "---",
+            "",
+            "## Rubric Axis Averages",
+            "",
+            "| Axis | Average Score |",
+            "|---|---|",
+        ]
+        for axis, avg in sorted(breakdown_avgs.items(), key=lambda x: -x[1]):
+            bar = "█" * int(avg * 20)
+            lines.append(f"| {axis} | {avg:.3f}  `{bar:<20}` |")
+        lines.append("")
+
+    # Top performers
+    top_loops = sorted(
+        [p for p in progression if p["score"] is not None],
+        key=lambda x: x["score"],
+        reverse=True,
+    )[:top]
+    if top_loops:
+        lines += [
+            "---",
+            "",
+            f"## Top {len(top_loops)} Performers",
+            "",
+        ]
+        for i, lp in enumerate(top_loops, 1):
+            loop_detail = store.get_loop(lp["id"])
+            lines.append(f"### {i}. {lp['goal']}")
+            lines.append(f"**Score:** {lp['score']:.3f} &nbsp; **Loop:** #{lp['loop_number']} &nbsp; **Status:** {lp['status']}")
+            if loop_detail and loop_detail.get("score_breakdown"):
+                bd = loop_detail["score_breakdown"]
+                bd_str = " | ".join(f"{k}: {v:.2f}" for k, v in bd.items())
+                lines.append(f"*{bd_str}*")
+            if loop_detail and loop_detail.get("reasoning"):
+                reasoning = loop_detail["reasoning"][:300]
+                if len(loop_detail["reasoning"]) > 300:
+                    reasoning += "…"
+                lines.append(f"> {reasoning}")
+            lines.append("")
+
+    # Learning moments
+    if learning_pairs:
+        lines += [
+            "---",
+            "",
+            "## Learning Moments (Failure → Improvement)",
+            "",
+        ]
+        for pair in learning_pairs:
+            f_loop = pair["failure"]
+            i_loop = pair["improvement"]
+            delta = pair["score_delta"]
+            lines.append(f"### Loop #{pair['failure_loop_number']} → #{pair['failure_loop_number'] + 1}  (+{delta:.2f})")
+            lines.append(f"**Failed:** {f_loop['goal']} — score {f_loop['score']:.2f}")
+            lines.append(f"> {f_loop['lesson']}")
+            lines.append(f"")
+            lines.append(f"**Improved:** {i_loop['goal']} — score {i_loop['score']:.2f}")
+            if i_loop.get("reasoning"):
+                r = i_loop["reasoning"][:200]
+                if len(i_loop["reasoning"]) > 200:
+                    r += "…"
+                lines.append(f"> {r}")
+            lines.append("")
+
+    # All goals (collapsed list)
+    lines += [
+        "---",
+        "",
+        "## All Goals",
+        "",
+        "| # | Goal | Score | Status | Date |",
         "|---|---|---|---|---|",
     ]
-    
-    for l in loops:
-        score_val = f"{l['score']:.2f}" if l['score'] is not None else "N/A"
-        goal_short = (l['goal'][:60] + '...') if len(l['goal']) > 60 else l['goal']
-        content.append(f"| `{l['id'][:8]}` | {l['created_at']} | {goal_short} | {score_val} | {l['status']} |")
-    
-    content.append("\n## 📂 Workspace Artifacts")
-    workspace_path = Path("workspace")
-    if workspace_path.exists():
-        files = list(workspace_path.glob("*"))
-        if files:
-            content.append("```")
-            for f in sorted(files, key=lambda x: x.stat().st_mtime, reverse=True):
-                mtime = datetime.fromtimestamp(f.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-                content.append(f"{f.name:<30} | {mtime}")
-            content.append("```")
-        else:
-            content.append("_ (Empty workspace) _")
-    else:
-        content.append("_ (Workspace directory not found) _")
+    for i, g in enumerate(reversed(all_goals), 1):
+        score_str = f"{g['score']:.2f}" if g["score"] is not None else "—"
+        date_str = g["created_at"][:16] if g.get("created_at") else "—"
+        goal_short = (g['goal'][:60] + "…") if len(g['goal']) > 60 else g['goal']
+        lines.append(f"| {i} | {goal_short} | {score_str} | {g['status']} | {date_str} |")
+    lines.append("")
 
-    Path(output).write_text("\n".join(content))
-    click.echo(f"✅ Report generated: {click.style(output, bold=True)}")
+    # Cost analysis
+    if cost_stats:
+        lines += [
+            "---",
+            "",
+            "## Cost Analysis",
+            "",
+            "| Model | Role | Loops | Total Cost | Avg/Loop | Total Tokens |",
+            "|---|---|---|---|---|---|",
+        ]
+        for c in cost_stats:
+            model_short = c["model"][-50:] if len(c["model"]) > 50 else c["model"]
+            lines.append(
+                f"| `{model_short}` | {c['agent_type']} | {c['loop_count']} "
+                f"| ${c['total_cost']:.4f} | ${c['avg_cost_per_loop']:.4f} | {c['total_tokens']:,} |"
+            )
+        lines.append("")
+
+    # Workspace artifacts
+    lines += ["---", "", "## Workspace Artifacts", ""]
+    workspace_path = Path(settings.memory.workspace_path) / settings.memory.persistent_workspace_name
+    if not workspace_path.exists():
+        workspace_path = Path("workspace")
+    if workspace_path.exists():
+        all_files = sorted(workspace_path.rglob("*"), key=lambda x: x.stat().st_mtime, reverse=True)
+        files = [f for f in all_files if f.is_file()]
+        if files:
+            lines.append("| File | Size | Modified |")
+            lines.append("|---|---|---|")
+            for f in files:
+                rel = f.relative_to(workspace_path.parent)
+                size = f.stat().st_size
+                size_str = f"{size:,} B" if size < 1024 else f"{size // 1024:,} KB"
+                mtime = datetime.fromtimestamp(f.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
+                lines.append(f"| `{rel}` | {size_str} | {mtime} |")
+        else:
+            lines.append("*(empty)*")
+    else:
+        lines.append("*(workspace directory not found)*")
+
+    Path(output).write_text("\n".join(lines))
+    click.echo(click.style(f"Report saved: {output}", fg='green', bold=True))
+    click.echo(f"  {s['total_loops']} loops · avg score {s['avg_score']:.3f} · ${s['total_cost_usd']:.4f} total")
 
 @cli.command()
 @click.option('--yes', is_flag=True, help='Skip confirmation.')
