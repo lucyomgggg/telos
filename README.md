@@ -51,14 +51,45 @@ This creates the necessary directories (`data/`, `workspace/`, `outputs/`) and a
 
 ## CLI Reference
 
+### Typical workflow
+
+```bash
+# 1. Run loops
+telos start --loops 5 --name "my-experiment"
+
+# 2. Check what happened
+telos status              # session list
+telos status --loops      # individual loop list
+
+# 3. Inspect a specific loop
+telos show                        # latest loop
+telos show <loop_id>              # specific loop (8-char ID ok)
+telos show <loop_id> --explain    # narrative explanation
+
+# 4. Export results
+telos export                          # latest session → JSON
+telos export <session_id>             # specific session
+telos export --format csv -o out.csv  # CSV to custom path
+
+# 5. Generate a full report
+telos report                  # saves to REPORT.md
+telos report -o summary.md    # custom path
+```
+
+### All commands
+
 | Command | Description |
 |:---|:---|
-| `telos start` | Launch the autonomous engine (`--loops N`). |
-| `telos status` | View recent loop history, scores, and costs. |
-| `telos show` | Deep-dive into a specific loop result (`--explain` for narrative). |
-| `telos report` | Generate a comprehensive Markdown report of recent work. |
-| `telos logs` | View raw system and agent logs (`-f` to follow). |
-| `telos clean` | Clear the `workspace/` and temporary logs. |
+| `telos init` | Set up config files and directories. |
+| `telos start` | Run autonomous loops. Options: `--loops N`, `--name`, `--model`, `--verbose`. |
+| `telos stop` | Stop a running loop gracefully. |
+| `telos status` | Show session history. Add `--loops` for individual loop view. |
+| `telos show [LOOP_ID]` | Inspect a loop result in detail. Add `--explain` for LLM narrative. |
+| `telos export [SESSION_ID]` | Export session data to JSON or CSV (`--format csv`, `-o FILE`). |
+| `telos report` | Generate a full Markdown report of all activity (`-o FILE`). |
+| `telos logs` | View agent logs. Add `-f` to stream in real time. |
+| `telos dashboard` | Open the interactive TUI dashboard. |
+| `telos clean` | Clear workspace files and logs. |
 
 ---
 

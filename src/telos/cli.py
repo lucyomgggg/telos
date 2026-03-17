@@ -15,35 +15,49 @@ init_directories()
 
 @click.group()
 def cli():
-    """Telos: open-source runtime where the AI decides what to build next."""
+    """Telos — autonomous AI runtime.
+
+    Typical workflow:
+
+    \b
+      telos start --loops 5 --name my-run   # run 5 loops
+      telos status                           # see session history
+      telos show                             # inspect latest loop
+      telos export --format csv             # export latest session
+    """
     pass
 
 @cli.command()
-@click.option('--force', is_flag=True, help='Overwrite existing configuration files.')
+@click.option('--force', is_flag=True, help='Overwrite existing files.')
 def init(force):
-    """Initialize Telos configuration and directories."""
+    """Set up config files and directories."""
     init_directories(force=force)
-    click.echo("✅ Initialized Telos directories and configuration.")
-    click.echo("\n--- Next Steps ---")
-    click.echo("1. API Keys: Copy .env.example to .env and add your API keys.")
-    click.echo("   Example: cp .env.example .env")
-    click.echo("2. Customization: Edit config.yaml or templates/ to customize agent behavior.")
-    click.echo("3. Run: Start the agent with 'telos start --loops 1'")
+    click.echo("Initialized Telos directories and configuration.")
+    click.echo("\nNext steps:")
+    click.echo("  1. Copy .env.example to .env and add your API keys.")
+    click.echo("  2. Edit config.yaml to set your initial_intent and models.")
+    click.echo("  3. Run: telos start --loops 1")
 
 @cli.command()
-@click.option('--model', help='The LLM model to use (default from config.yaml)')
-@click.option('--loops', default=1, type=int, help='Number of loops to run (default: 1)')
-@click.option('--verbose', is_flag=True, help='Show full results in terminal.')
-@click.option('--name', default=None, help='Optional name for this session.')
+@click.option('--loops', '-n', default=1, type=int, help='Number of loops to run.  [default: 1]')
+@click.option('--name', default=None, help='Session name (auto-generated if omitted).')
+@click.option('--model', default=None, help='Override producer model (default: from config.yaml).')
+@click.option('--verbose', is_flag=True, help='Print full result output for each loop.')
 def start(model, loops, verbose, name):
-    """Start the autonomous loop."""
+    """Run autonomous loops.
+
+    Each invocation creates a session that groups all loops together.
+    Results are stored in data/telos.db and can be exported with 'telos export'.
+    """
     from .telos_core import AgentLoop
     from .config import PID_FILE
 
     selected_model = model or settings.llm.producer_model
-    click.echo(f"✨ {click.style('Telos Initiated', fg='cyan', bold=True)}")
-    click.echo(f"   Model: {click.style(selected_model, fg='white')}")
-    click.echo(f"   Mode:  Autonomous ({loops} iterate(s))\n")
+    click.echo(f"  Model : {click.style(selected_model, fg='cyan')}")
+    click.echo(f"  Loops : {loops}")
+    if name:
+        click.echo(f"  Name  : {name}")
+    click.echo("")
 
     agent = AgentLoop(session_name=name, intended_loops=loops)
 
@@ -108,7 +122,7 @@ def start(model, loops, verbose, name):
 
 @cli.command()
 def stop():
-    """Stop the autonomous loop gracefully."""
+    """Stop a running loop gracefully."""
     if not PID_FILE.exists():
         click.echo("No running Telos process found.")
         return
@@ -127,39 +141,64 @@ def stop():
         click.echo(f"Permission denied sending signal to PID. Try: kill $(cat {PID_FILE})")
 
 @cli.command()
-@click.option('--limit', default=10, help='Number of loops to show.')
-def status(limit):
-    """Show loop history, scores, and costs."""
+@click.option('--limit', '-n', default=20, help='Number of entries to show.  [default: 20]')
+@click.option('--loops', 'show_loops', is_flag=True, help='Show individual loop history instead of sessions.')
+def status(limit, show_loops):
+    """Show run history (sessions by default, loops with --loops).
+
+    \b
+    telos status            # session list
+    telos status --loops    # individual loop list
+    """
     from .memory import MemoryStore
-    memory = MemoryStore()
-    loops = memory.list_loops(limit=limit)
-    
-    if not loops:
-        click.echo(click.style("No loops recorded yet. Run 'telos start' to begin.", dim=True))
-        return
-        
-    click.echo(f"\n{click.style('📊 TELOS EXECUTION HISTORY', fg='cyan', bold=True)}")
-    click.echo(f"{click.style('ID', dim=True):<10} | {click.style('Status', dim=True):<10} | {click.style('Score', dim=True):<7} | {click.style('Cost', dim=True):<8} | {click.style('Goal', dim=True)}")
-    click.echo(click.style("-" * 100, dim=True))
-    
-    for loop in loops:
-        loop_id = loop['id'][:8]
-        status_color = 'green' if loop['status'] == 'completed' else 'yellow' if loop['status'] == 'running' else 'red'
-        status_str = click.style(loop['status'], fg=status_color)
-        
-        score_val = loop['score'] if loop['score'] is not None else 0.0
-        score_color = 'green' if score_val > 0.7 else 'yellow' if score_val > 0.4 else 'red'
-        score_str = click.style(f"{score_val:.2f}", fg=score_color) if loop['score'] is not None else click.style("N/A", dim=True)
-        
-        cost = f"${loop['cost_usd']:.4f}"
-        goal = loop['goal'][:50] + "..." if len(loop['goal']) > 50 else loop['goal']
-        
-        click.echo(f"{loop_id:<10} | {status_str:<10} | {score_str:<7} | {cost:<8} | {goal}")
-    click.echo("")
+    store = MemoryStore()
+
+    if show_loops:
+        loops = store.list_loops(limit=limit)
+        if not loops:
+            click.echo(click.style("No loops recorded yet.", dim=True))
+            return
+        click.echo(f"\n{click.style('LOOP HISTORY', fg='cyan', bold=True)}")
+        header = f"{'ID':<10}  {'Status':<10}  {'Score':>6}  {'Cost':>8}  Goal"
+        click.echo(click.style(header, dim=True))
+        click.echo(click.style("-" * 90, dim=True))
+        for loop in loops:
+            lid = loop['id'][:8]
+            st = loop['status']
+            st_color = 'green' if st == 'completed' else 'yellow' if st == 'running' else 'red'
+            st_str = click.style(f"{st:<10}", fg=st_color)
+            score_val = loop['score'] if loop['score'] is not None else 0.0
+            score_color = 'green' if score_val > 0.7 else 'yellow' if score_val > 0.4 else 'red'
+            score_str = click.style(f"{score_val:.2f}", fg=score_color) if loop['score'] is not None else click.style("  N/A", dim=True)
+            cost = f"${loop['cost_usd']:.4f}"
+            goal = loop['goal'][:55] + "..." if len(loop['goal']) > 55 else loop['goal']
+            click.echo(f"{lid:<10}  {st_str}  {score_str:>6}  {cost:>8}  {goal}")
+        click.echo("")
+    else:
+        rows = store.list_sessions(limit=limit)
+        if not rows:
+            click.echo(click.style("No sessions recorded yet. Run 'telos start' to begin.", dim=True))
+            return
+        click.echo(f"\n{click.style('SESSION HISTORY', fg='cyan', bold=True)}")
+        header = f"{'ID':<10}  {'Name':<28}  {'Status':<10}  {'Loops':>7}  {'Score':>6}  {'Cost':>8}  Model"
+        click.echo(click.style(header, dim=True))
+        click.echo(click.style("-" * 100, dim=True))
+        for s in rows:
+            sid = s['id'][:8]
+            name = (s['name'] or '')[:28]
+            st = s['status']
+            st_color = 'green' if st == 'completed' else 'yellow' if st == 'running' else 'red'
+            st_str = click.style(f"{st:<10}", fg=st_color)
+            loops_str = f"{s['completed_loops']}/{s['intended_loops']}"
+            avg = f"{s['avg_score']:.2f}" if s['avg_score'] is not None else "  N/A"
+            cost = f"${s['total_cost_usd']:.4f}"
+            model_str = (s.get('producer_model') or '')[:35]
+            click.echo(f"{sid:<10}  {name:<28}  {st_str}  {loops_str:>7}  {avg:>6}  {cost:>8}  {model_str}")
+        click.echo("")
 
 @cli.command()
-@click.option('--lines', '-n', default=50, type=int, help='Number of lines to show')
-@click.option('--follow', '-f', is_flag=True, help='Follow log output in real time')
+@click.option('--lines', '-n', default=50, type=int, help='Number of lines to show.  [default: 50]')
+@click.option('--follow', '-f', is_flag=True, help='Stream new log lines in real time (Ctrl+C to stop).')
 def logs(lines, follow):
     """View agent logs."""
     if not LOG_FILE.exists():
@@ -181,10 +220,14 @@ def logs(lines, follow):
                 click.echo(line, nl=False)
 
 @cli.command()
-@click.argument("loop_id", required=False)
-@click.option("--explain", is_flag=True, help="Provide a narrative explanation of the loop.")
+@click.argument("loop_id", required=False, metavar="[LOOP_ID]")
+@click.option("--explain", is_flag=True, help="Generate a narrative explanation using the LLM.")
 def show(loop_id, explain):
-    """Show details of a specific loop (defaults to latest)."""
+    """Inspect a loop result in detail.
+
+    LOOP_ID can be the full UUID or the first 8 characters.
+    Defaults to the most recent loop if omitted.
+    """
     from .memory import MemoryStore
     from .telos_core import AgentLoop
     store = MemoryStore()
@@ -233,10 +276,10 @@ def show(loop_id, explain):
         click.echo(f"{click.style('═' * 80, fg='cyan')}\n")
 
 @cli.command()
-@click.option("--output", "-o", default="REPORT.md", help="Path to save the report.")
-@click.option("--top", default=5, help="Number of top-performing loops to highlight.")
+@click.option("--output", "-o", default="REPORT.md", help="Output file path.  [default: REPORT.md]")
+@click.option("--top", default=5, help="Number of top-scoring loops to feature.  [default: 5]")
 def report(output, top):
-    """Generate a comprehensive Markdown report of all loop activity."""
+    """Generate a full Markdown report of all activity."""
     from .memory import MemoryStore
     store = MemoryStore()
 
@@ -414,9 +457,9 @@ def report(output, top):
     click.echo(f"  {s['total_loops']} loops · avg score {s['avg_score']:.3f} · ${s['total_cost_usd']:.4f} total")
 
 @cli.command()
-@click.option('--yes', is_flag=True, help='Skip confirmation.')
+@click.option('--yes', is_flag=True, help='Skip confirmation prompt.')
 def clean(yes):
-    """Clear workspace files and temporary logs."""
+    """Clear workspace files and logs."""
     if not yes:
         if not click.confirm(click.style("⚠️ Are you sure you want to clear the workspace and logs?", fg='red')):
             return
@@ -440,43 +483,20 @@ def clean(yes):
     click.echo(click.style("✨ Cleanup complete.", fg='green', bold=True))
 
 @cli.command()
-@click.option('--limit', default=20, help='Number of sessions to show.')
-def sessions(limit):
-    """List recent sessions with model and performance summary."""
-    from .memory import MemoryStore
-    store = MemoryStore()
-    rows = store.list_sessions(limit=limit)
-    if not rows:
-        click.echo(click.style("No sessions recorded yet. Run 'telos start' to begin.", dim=True))
-        return
-    click.echo(f"\n{click.style('SESSION HISTORY', fg='cyan', bold=True)}")
-    header = f"{'ID':<10}  {'Name':<28}  {'Status':<10}  {'Loops':>7}  {'Score':>6}  {'Cost':>8}  Model"
-    click.echo(click.style(header, dim=True))
-    click.echo(click.style("-" * 100, dim=True))
-    for s in rows:
-        sid = s['id'][:8]
-        name = (s['name'] or '')[:28]
-        status = s['status']
-        status_color = 'green' if status == 'completed' else 'yellow' if status == 'running' else 'red'
-        status_str = click.style(f"{status:<10}", fg=status_color)
-        loops_str = f"{s['completed_loops']}/{s['intended_loops']}"
-        avg = f"{s['avg_score']:.2f}" if s['avg_score'] is not None else "  N/A"
-        cost = f"${s['total_cost_usd']:.4f}"
-        model_str = (s.get('producer_model') or '')[:35]
-        click.echo(f"{sid:<10}  {name:<28}  {status_str}  {loops_str:>7}  {avg:>6}  {cost:>8}  {model_str}")
-    click.echo("")
-
-
-@cli.command()
-@click.argument("session_id", required=False)
+@click.argument("session_id", required=False, metavar="[SESSION_ID]")
 @click.option("--format", "fmt", type=click.Choice(["json", "csv"]), default="json",
-              help="Output format (default: json).")
-@click.option("--output", "-o", default=None, help="Output file path. Defaults to session_<id>.json/csv in cwd.")
+              help="Output format.  [default: json]")
+@click.option("--output", "-o", default=None, help="Output file path (default: session_<id>.json/csv).")
 def export(session_id, fmt, output):
-    """Export session data as JSON or CSV.
+    """Export session data to JSON or CSV.
 
-    If SESSION_ID is omitted, exports the latest session.
-    SESSION_ID can be the full UUID or just the first 8 characters.
+    SESSION_ID is optional — defaults to the latest session.
+    Accepts the full UUID or just the first 8 characters.
+
+    \b
+    telos export                          # latest session → JSON
+    telos export abc12345 --format csv    # specific session → CSV
+    telos export -o results.json          # save to custom path
     """
     import json as _json
     from .memory import MemoryStore
@@ -518,7 +538,7 @@ def export(session_id, fmt, output):
 
 @cli.command()
 def dashboard():
-    """Launch the interactive TUI dashboard."""
+    """Open the interactive TUI dashboard."""
     from .dashboard.tui import TelosDashboard
     app = TelosDashboard()
     app.run()
