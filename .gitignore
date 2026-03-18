@@ -22,14 +22,8 @@ venv/
 # Telos runtime
 *.db
 workspace/
-data/
+projects/
 
 # Project specific
 config.yaml
-Progress.md
-verify_*.py
-test_telos.db
-SUMMARY.md
-CODEBASE_EXPLANATION.md
-REPORT.md
-session_7a3a60d7.json
+

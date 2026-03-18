@@ -72,24 +72,52 @@ telos export <session_id>             # specific session
 telos export --format csv -o out.csv  # CSV to custom path
 
 # 5. Generate a full report
-telos report                  # saves to REPORT.md
+telos report                  # saves to report_<project>_<timestamp>.md
 telos report -o summary.md    # custom path
 ```
+
+### Starting over (reset)
+
+Wipe all data in the current project and restart from loop 1:
+
+```bash
+telos reset        # wipe DB + workspace + log (with confirm)
+telos reset --yes  # same, no confirmation prompt
+```
+
+### Project isolation
+
+Each project has its own database, workspace, and logs under `projects/<name>/`.
+
+```bash
+telos project current              # show the active project and its stats
+telos project list                 # list all projects (★ marks the active one)
+telos project new experiment-v2   # create a new project and switch to it
+telos project switch main          # switch to an existing project
+telos project delete old-run       # permanently delete a project and its data
+```
+
+The active project is stored in `.env.local` as `TELOS_HOME`. Every command operates on the active project — `telos status` and `telos project current` both show which project is active.
 
 ### All commands
 
 | Command | Description |
 |:---|:---|
-| `telos init` | Set up config files and directories. |
+| `telos init` | Set up config files and the default project directory. |
 | `telos start` | Run autonomous loops. Options: `--loops N`, `--name`, `--model`, `--verbose`. |
 | `telos stop` | Stop a running loop gracefully. |
 | `telos status` | Show session history. Add `--loops` for individual loop view. |
-| `telos show [LOOP_ID]` | Inspect a loop result in detail. Add `--explain` for LLM narrative. |
+| `telos show [LOOP_ID]` | Inspect a loop result. Add `--explain` for LLM narrative. |
 | `telos export [SESSION_ID]` | Export session data to JSON or CSV (`--format csv`, `-o FILE`). |
-| `telos report` | Generate a full Markdown report of all activity (`-o FILE`). |
+| `telos report` | Generate a full Markdown report (`-o FILE`). |
 | `telos logs` | View agent logs. Add `-f` to stream in real time. |
 | `telos dashboard` | Open the interactive TUI dashboard. |
-| `telos clean` | Clear workspace files and logs. |
+| `telos reset` | Wipe the active project's DB + workspace + log to restart from loop 1. Add `--yes` to skip confirmation. |
+| `telos project current` | Show the active project name and stats. |
+| `telos project list` | List all projects (★ = active) with loop counts and scores. |
+| `telos project new NAME` | Create a new isolated project and switch to it. |
+| `telos project switch NAME` | Switch the active project. |
+| `telos project delete NAME` | Permanently delete a project and all its data. |
 
 ---
 

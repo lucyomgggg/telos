@@ -3,7 +3,6 @@ import yaml
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import Dict, Optional
-import logging
 
 # --- Cache ---
 _settings_cache = None
@@ -11,8 +10,9 @@ _settings_cache = None
 # --- Paths ---
 PROJECT_ROOT = Path.cwd()
 LOCAL_CONFIG = PROJECT_ROOT / "config.yaml"
-# Default to project-local data folder
-TELOS_HOME = Path(os.getenv("TELOS_HOME", PROJECT_ROOT / "data"))
+# All data lives inside a named project under projects/.
+# TELOS_HOME can be overridden via env var (written to .env.local by `telos project switch`).
+TELOS_HOME = Path(os.getenv("TELOS_HOME", PROJECT_ROOT / "projects" / "main"))
 def _safe_exists(p: Path) -> bool:
     try:
         return p.exists()
@@ -113,7 +113,11 @@ class Settings(BaseModel):
             settings.memory.qdrant_url = env_qdrant
         if env_docker := os.getenv("TELOS_USE_DOCKER"):
             settings.sandbox.use_docker = env_docker.lower() == "true"
-        
+
+        # Workspace is always scoped to the active project (TELOS_HOME).
+        # This overrides the config.yaml value so each project has isolated workspace.
+        settings.memory.workspace_path = str(TELOS_HOME / "workspace")
+
         _settings_cache = settings
         return settings
 
