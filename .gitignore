@@ -19,11 +19,21 @@ venv/
 .vscode/
 .idea/
 
-# Telos runtime
+# Telos runtime data (all project data lives here)
 *.db
-workspace/
+data/
 projects/
+workspace/
 
-# Project specific
+# Logs
+*.log
+
+# Generated outputs
+outputs/
+report_*.md
+
+# Tests
+.pytest_cache/
+
+# Project-specific config (user-edited, not committed)
 config.yaml
-

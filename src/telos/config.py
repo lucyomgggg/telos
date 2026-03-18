@@ -25,7 +25,6 @@ CONFIG_PATH = LOCAL_CONFIG if _safe_exists(LOCAL_CONFIG) else (TELOS_HOME / "con
 if not _safe_exists(CONFIG_PATH):
     CONFIG_PATH = LOCAL_CONFIG
 
-OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 LOG_FILE = TELOS_HOME / "agent.log"
 PID_FILE = TELOS_HOME / "telos.pid"
@@ -165,9 +164,8 @@ HF_TOKEN=
             f.write(content)
 
 def init_directories(force: bool = False):
-    """Initialize Telos home, outputs, and default templates/config."""
+    """Initialize Telos home and default templates/config."""
     TELOS_HOME.mkdir(parents=True, exist_ok=True)
-    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
     
     generate_env_example()
