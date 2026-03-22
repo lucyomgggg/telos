@@ -29,23 +29,100 @@ Telos operates on a continuous feedback loop:
 
 ---
 
+## Prerequisites
+
+| Tool | Version | Purpose |
+|:---|:---|:---|
+| [Python](https://www.python.org/downloads/) | 3.11+ | Runtime |
+| [Docker](https://docs.docker.com/get-docker/) | 24+ | Sandbox execution & Qdrant |
+| [Docker Compose](https://docs.docker.com/compose/install/) | v2+ | Infrastructure orchestration |
+
+### Installing prerequisites
+
+**macOS (Homebrew)**
+```bash
+# Step 1: Install Homebrew if not.
+# Xcode Command Line Tools will automatically be installed.
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Step 2: Install Python and Docker
+brew install python@3.11
+brew install --cask docker   # Contains Docker Compose
+
+# Step 3: Start Docker Desktop（Open mannualy at first time.）
+open -a Docker
+```
+
+**Linux (Ubuntu/Debian)**
+```bash
+sudo apt update && sudo apt install -y python3.11 python3.11-venv
+# Docker: follow https://docs.docker.com/engine/install/ubuntu/
+```
+
+**Windows**
+- Install [Python 3.11+](https://www.python.org/downloads/)
+- Install [Docker Desktop](https://docs.docker.com/desktop/install/windows-install/) (includes Compose)
+
+---
+
 ## Getting Started
 
-### 1. Installation
+### 1. Clone & install
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd telos
 
-# Install dependencies (requires Python 3.11+)
+# (Recommended) create a virtual environment
+python3.11 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
+# Install dependencies
 pip install -e .
 ```
 
-### 2. Initialization
+### 2. Start infrastructure (Docker)
+
+Telos requires **Qdrant** (vector store) and a **sandbox** container to run.
+
+```bash
+# Start Qdrant + sandbox in the background
+docker compose up -d
+
+# Verify both services are healthy
+docker compose ps
+```
+
+Services started:
+- **qdrant** — vector database on `localhost:6333` (REST) and `localhost:6334` (gRPC)
+- **telos-agent-sandbox** — isolated code-execution container mounted to `./workspace`
+
+To stop:
+```bash
+docker compose down
+```
+
+### 3. Configure environment
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and fill in at least one LLM API key:
+
+```dotenv
+# Choose one or more providers
+GEMINI_API_KEY=your-key-here
+OPENAI_API_KEY=your-key-here
+ANTHROPIC_API_KEY=your-key-here
+
+# Qdrant (default points to the Docker service above)
+QDRANT_URL=http://localhost:6333
+```
+
+### 4. Initialize Telos
 ```bash
 telos init
 ```
-This creates the necessary directories (`data/`, `workspace/`, `outputs/`) and a template `.env` file. Add your API keys (OpenAI, Gemini, etc.) to `.env`.
+This creates the necessary directories (`data/`, `workspace/`, `outputs/`) and the default project structure.
 
 ---
 
