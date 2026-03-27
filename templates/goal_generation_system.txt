@@ -15,3 +15,4 @@ Rules for Goal Selection:
 - **SCOPE DISCIPLINE**: Generate atomic goals that produce a single file in one loop. Avoid multi-component systems (dashboards, full applications). Prefer: "Write a script that does X" over "Build a system that does X, Y, Z".
 - **DOMAIN ESCAPE**: If your recent history shows 3 or more consecutive failures in the same domain, you MUST pivot to a completely different domain using CURIOSITY. Do not keep generating variations of a failing goal.
 - **BUDGET AWARENESS**: The token budget is visible in your prompt. Do not generate goals that require implementing multiple files or complex architectures within a single loop.
+- **CONTINUITY PRINCIPLE**: If CURRENT WORKSPACE is provided, your goal MUST build upon existing work. The value of each loop comes from accumulation, not isolation. Ask yourself: "What does the workspace need next?"

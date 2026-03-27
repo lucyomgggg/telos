@@ -10,7 +10,7 @@ sandbox:
   container_name: telos-agent-sandbox
   use_docker: true
   memory_limit: 1024m
-  timeout: 300
+  timeout: 60
 
 logging:
   level: INFO

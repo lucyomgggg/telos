@@ -22,6 +22,8 @@ class SandboxStrategy(ABC):
     def write_file(self, full_path: Path, relative_path: str, content: str): pass
     @abstractmethod
     def read_file(self, full_path: Path, relative_path: str) -> str: pass
+    @abstractmethod
+    def list_files(self, path: str = "") -> list: pass
 
 class DockerSandboxStrategy(SandboxStrategy):
     def __init__(self, client, image_name, container_name, mem_limit):
@@ -103,6 +105,27 @@ class DockerSandboxStrategy(SandboxStrategy):
                 return tar.extractfile(tar.firstmember).read().decode('utf-8')
         except Exception as e: return f"Error: {e}"
 
+    def list_files(self, path: str = "") -> list:
+        target = f"/workspace/{path}".rstrip("/") if path else "/workspace"
+        result = self.execute(
+            f'find {target} -mindepth 2 -maxdepth 2 -type f -printf "%P\\t%s\\n" 2>/dev/null',
+            timeout=10
+        )
+        files = []
+        for line in result.get("output", "").splitlines():
+            line = line.strip()
+            if "\t" not in line:
+                continue
+            rel_path, size_str = line.rsplit("\t", 1)
+            parts = Path(rel_path).parts
+            if len(parts) == 2:
+                loop_id, filename = parts
+                try:
+                    files.append({"path": filename, "loop_id": loop_id, "size_bytes": int(size_str)})
+                except ValueError:
+                    pass
+        return files
+
     def build_image(self, dockerfile_path="."):
         log.info("Building Docker image %s...", self.image_name)
         self.client.images.build(path=dockerfile_path, tag=self.image_name)
@@ -131,6 +154,20 @@ class LocalSandboxStrategy(SandboxStrategy):
     def read_file(self, full_path: Path, relative_path: str) -> str:
         if not full_path.exists(): return f"Error: File {relative_path} not found."
         with open(full_path, "r") as f: return f.read()
+
+    def list_files(self, path: str = "") -> list:
+        base = (self.workspace / path) if path else self.workspace
+        files = []
+        if not base.exists():
+            return files
+        for item in base.rglob("*"):
+            if item.is_file():
+                rel = item.relative_to(base)
+                parts = rel.parts
+                if len(parts) == 2:
+                    loop_id, filename = parts
+                    files.append({"path": filename, "loop_id": loop_id, "size_bytes": item.stat().st_size})
+        return files
 
 class SandboxManager:
     def __init__(self, image_name=None, container_name=None, workspace_dir=None):
@@ -196,3 +233,8 @@ class SandboxManager:
         full_path = self._resolve_safe_path(file_path)
         relative_path = os.path.relpath(full_path, self.local_workspace)
         return self.strategy.read_file(full_path, relative_path)
+
+    def list_files(self, path: str = "") -> list:
+        if path:
+            self._resolve_safe_path(path)  # security check
+        return self.strategy.list_files(path)

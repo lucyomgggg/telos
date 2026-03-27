@@ -19,11 +19,11 @@ memory:
 critic:
   rubric_path: rubric.json
 
-history_limit: 20
-similar_artifacts_limit: 3
+history_limit: 10
+similar_artifacts_limit: 2
 failure_threshold: 0.3
 max_lessons: 2
-rate_limit_delay: 2.0
+rate_limit_delay: 0.5
 deduplication_threshold: 0.85
 
 model_cost_overrides:

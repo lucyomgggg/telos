@@ -28,7 +28,7 @@ class GoalGenerator(BaseAgent):
         self.deduplicator = GoalDeduplicator()
 
     def generate(self, initial_intent: str, history: List[Dict], similar: List[Dict],
-                 loop_count: int = 0) -> GoalSchema:
+                 loop_count: int = 0, workspace_state: list = None) -> GoalSchema:
         history_text = "\n".join([f"- Goal: {h['goal']} | Score: {h['score']}" for h in history])
         similar_text = ""
         if similar:
@@ -38,11 +38,23 @@ class GoalGenerator(BaseAgent):
                  for s in similar]
             )
 
+        workspace_section = ""
+        if workspace_state:
+            file_lines = "\n".join(f"- {f['path']} (loop {f['loop_id']})" for f in workspace_state)
+            workspace_section = (
+                f"\n\nCURRENT WORKSPACE\n"
+                f"以下のファイルが既に存在する:\n{file_lines}\n\n"
+                f"制約:\n"
+                f"- 上記のファイルを無視した独立したスクリプトの新規作成は禁止。\n"
+                f"- 既存ファイルの拡張、複数ファイルの統合、既存システムの改善のいずれかであること。"
+            )
+
         user_prompt = (
             f"Ambient Intent: {initial_intent}\n\n"
             f"Token Budget: {settings.llm.max_tokens_per_loop} tokens per loop — "
             f"generate ATOMIC goals (single file, <50 lines) that fit within this budget.\n\n"
-            f"Recent History:\n{history_text}{similar_text}\n\n"
+            f"Recent History:\n{history_text}{similar_text}"
+            f"{workspace_section}\n\n"
             f"Decision: Generate the next goal."
         )
         system_prompt = self.load_template("goal_generation_system", "Generate a new and distinct goal.")
@@ -233,7 +245,8 @@ class Orchestrator:
             else:
                 qdrant_query = history[-1]["goal"] if history else intent
             similar = self.vector.search_similar(qdrant_query, limit=settings.similar_artifacts_limit)
-            goal = self.goal_gen.generate(intent, history, similar, loop_count=loop_count)
+            workspace_state = self.sandbox.list_files()
+            goal = self.goal_gen.generate(intent, history, similar, loop_count=loop_count, workspace_state=workspace_state)
             # Prefix output_path with the short loop_id to prevent cross-loop file collisions.
             if goal.output_path and not goal.output_path.startswith(loop_id[:8]):
                 goal.output_path = f"{loop_id[:8]}/{goal.output_path}"
