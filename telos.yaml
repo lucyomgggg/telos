@@ -1,8 +1,8 @@
-# telos.yaml — プロジェクト設定
-# モデルの選択、initial intent、メモリパラメータなど。ユーザーが編集する。
-# インフラ設定（Qdrant、Docker）は config.yaml を参照。
+# telos.yaml — project settings
+# Model selection, initial intent, memory parameters, etc. User-editable.
+# Infrastructure settings (Qdrant, Docker) are referenced in config.yaml.
 
-initial_intent: "Build useful tools and utilities. Write code, test it, improve it."
+initial_intent: "SURVIVE"
 
 llm:
   producer_model: openrouter/deepseek/deepseek-chat-v3-0324

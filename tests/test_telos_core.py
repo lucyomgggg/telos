@@ -73,3 +73,42 @@ def test_agent_loop_safety_check_monthly_cost():
              patch.object(loop.cost_tracker, "get_monthly_cost", return_value=51.0):
             with pytest.raises(RuntimeError, match="Monthly budget"):
                 loop._check_safety()
+
+
+def test_shutdown_preserves_workspace():
+    from src.telos.config import Settings
+    import tempfile
+    from pathlib import Path
+    mock_settings = Settings()
+
+    with patch("src.telos.telos_core.settings") as mock_settings_global, \
+         patch("src.telos.telos_core.MemoryStore") as mock_memory_store, \
+         patch("src.telos.telos_core.VectorStore"), \
+         patch("src.telos.telos_core.SandboxManager") as mock_sandbox_cls, \
+         patch("src.telos.telos_core.ToolRegistry"), \
+         patch("src.telos.telos_core.GoalGenerator"), \
+         patch("src.telos.telos_core.ProducerAgent"), \
+         patch("src.telos.telos_core.CriticAgent"), \
+         patch("src.telos.telos_core.JournalWriter"):
+        mock_settings_global.load.return_value = mock_settings
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir) / "persistent"
+            ws.mkdir()
+            mock_sandbox = MagicMock()
+            mock_sandbox.local_workspace = ws
+            mock_sandbox_cls.return_value = mock_sandbox
+
+            sqlite_mock = MagicMock()
+            sqlite_mock.list_loops_by_session.return_value = []
+            mock_memory_store.return_value = sqlite_mock
+
+            loop = AgentLoop()
+            loop.sandbox = mock_sandbox
+
+            sentinel = ws / "output.py"
+            sentinel.write_text("# generated code")
+
+            loop.shutdown()
+
+            assert sentinel.exists(), "shutdown() must not delete the workspace"

@@ -6,3 +6,4 @@ IMPORTANT CONSTRAINTS:
 - **No Minimal Samples**: Do not just write a list of requirements or a single function. Build a complete, usable tool that achieves the goal.
 - **Act Immediately**: Go directly to tool calls. Do not send a text planning message first — use tools without preamble.
 - **Finish**: Once the goal is fully achieved and VERIFIED via execution, call `task_complete` with a detailed summary including the test results.
+- **Existing Workspace**: At the start of each new loop, check what files already exist in the workspace using `list_files` or `execute_command` (e.g. `ls -la`). The workspace persists across sessions — previously generated files are still present. Build on existing work rather than starting from scratch. Prefer extending or improving existing files over creating duplicates.

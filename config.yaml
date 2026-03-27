@@ -1,6 +1,6 @@
-# config.yaml — インフラ設定
-# Qdrant、Docker、ログ、コスト上限など。基本的に触らない。
-# プロジェクト設定（モデル、intent）は telos.yaml を編集すること。
+# config.yaml — infrastructure settings
+# Qdrant URL, Docker settings, logging, cost limits, etc. Generally not touched.
+# Project settings (models, intent) are edited in telos.yaml.
 
 memory:
   qdrant_url: http://localhost:6333

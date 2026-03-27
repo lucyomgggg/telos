@@ -2,7 +2,7 @@
     "axes": [
         {
             "name": "completeness",
-            "weight": 0.3,
+            "weight": 0.2,
             "description": "True if all requirements are met and no placeholders remain."
         },
         {
@@ -12,7 +12,7 @@
         },
         {
             "name": "novelty",
-            "weight": 0.3,
+            "weight": 0.4,
             "description": "New capabilities or significant improvements compared to history."
         },
         {

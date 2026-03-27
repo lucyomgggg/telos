@@ -326,8 +326,7 @@ class Orchestrator:
             raise RuntimeError("Monthly budget exceeded.")
 
     def shutdown(self):
-        """Clean up the persistent workspace and finalize session. Call once when done."""
-        import shutil
+        """Finalize session. Call once when done."""
         try:
             loops = self.sqlite.list_loops_by_session(self.session_id)
             completed = [l for l in loops if l["status"] in ("completed", "failed")]
@@ -355,9 +354,7 @@ class Orchestrator:
                      round(sum(scores) / len(scores), 4) if scores else "N/A")
         except Exception as e:
             log.warning("Could not finalize session stats: %s", e)
-        if self.sandbox.local_workspace.exists():
-            shutil.rmtree(self.sandbox.local_workspace)
-            log.info("Persistent workspace cleaned up.")
+        log.info("Workspace preserved at %s", self.sandbox.local_workspace)
 
 class AgentLoop(Orchestrator):
     """Legacy wrapper for CLI compatibility."""
