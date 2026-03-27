@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Any, Dict, Tuple
 
 from .config import settings, TELOS_HOME
+from .journal import JournalWriter
 from .logger import get_logger
 from .memory import MemoryStore, VectorStore
 from .db_models import SessionRecord
@@ -202,6 +203,14 @@ class Orchestrator:
         self.sqlite.create_session(session_rec)
         log.info("Session %s started: %s", self.session_id[:8], session_rec.name)
 
+        self._loop_num = 0
+        self.journal = JournalWriter(TELOS_HOME, TELOS_HOME.name)
+        self.journal.write_session_header(
+            self.session_id,
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+            cfg.llm.producer_model,
+        )
+
     def run_iteration(self, intent: Optional[str] = None) -> Dict:
         if intent is None:
             intent = settings.initial_intent
@@ -284,6 +293,17 @@ class Orchestrator:
             saved = self.sqlite.get_loop(loop_id)
             loop_data["cost_usd"] = saved.get("cost_usd", 0.0) if saved else 0.0
             loop_data["tokens_used"] = saved.get("tokens_used", 0) if saved else 0
+            self._loop_num += 1
+            try:
+                self.journal.write_loop(
+                    loop_num=self._loop_num,
+                    score=loop_data["score"] or 0.0,
+                    goal=loop_data["goal"],
+                    result=(loop_data.get("goal_detail") or {}).get("output_path") or "",
+                    reasoning=loop_data.get("reasoning", ""),
+                )
+            except Exception:
+                pass
             return loop_data
 
         except Exception as e:
@@ -313,13 +333,22 @@ class Orchestrator:
             completed = [l for l in loops if l["status"] in ("completed", "failed")]
             scores = [l["score"] for l in completed if l.get("score") is not None]
             total_cost = sum(l.get("cost_usd") or 0.0 for l in loops)
+            avg_score_val = round(sum(scores) / len(scores), 4) if scores else None
+            try:
+                self.journal.write_session_summary(
+                    loops=len(completed),
+                    avg_score=round(sum(scores) / len(scores), 2) if scores else 0.0,
+                    cost_usd=round(total_cost, 3),
+                )
+            except Exception:
+                pass
             self.sqlite.update_session(
                 self.session_id,
                 status="completed",
                 completed_at=datetime.now(timezone.utc).replace(tzinfo=None),
                 completed_loops=len(completed),
                 total_cost_usd=round(total_cost, 6),
-                avg_score=round(sum(scores) / len(scores), 4) if scores else None,
+                avg_score=avg_score_val,
             )
             log.info("Session %s finalized: %d loops, avg_score=%s",
                      self.session_id[:8], len(completed),
