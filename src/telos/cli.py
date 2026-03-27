@@ -6,11 +6,13 @@ import logging
 
 os.environ.setdefault("LITELLM_LOG", "ERROR")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("HF_HUB_VERBOSITY", "error")
 
 warnings.filterwarnings("ignore", module="litellm")
 logging.getLogger("litellm").setLevel(logging.CRITICAL)
 logging.getLogger("httpx").setLevel(logging.ERROR)
 logging.getLogger("httpcore").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 from pathlib import Path
 import click
