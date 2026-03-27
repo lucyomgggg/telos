@@ -22,7 +22,11 @@ from dotenv import load_dotenv
 load_dotenv()
 load_dotenv(".env.local")
 
-from .config import init_directories, PID_FILE, LOG_FILE, TELOS_HOME, CONFIG_PATH, settings
+from .config import (
+    init_directories, init_global_directories, init_project_directories,
+    _get_global_config_path,
+    PID_FILE, LOG_FILE, TELOS_HOME, CONFIG_PATH, settings,
+)
 
 # Ensure directories and default config exist on import or explicitly via init
 init_directories()
@@ -121,15 +125,30 @@ def _wizard_embedding_model():
 @cli.command()
 @click.option('--force', is_flag=True, help='Overwrite existing config files.')
 @click.option('--non-interactive', 'non_interactive', is_flag=True, help='Skip all prompts (CI mode).')
-def init(force, non_interactive):
+@click.option('--global', 'is_global', is_flag=True, help='Initialize ~/.config/telos/config.yaml (global/machine config).')
+def init(force, non_interactive, is_global):
     """Interactive setup wizard. Run once after installation."""
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "0"
 
     click.echo("\nWelcome to Telos — Autonomous AI Runtime\n")
 
-    if not force and not non_interactive and CONFIG_PATH.exists():
-        if not click.confirm("Already initialized. Re-run setup?", default=False):
-            click.echo("Aborted.")
+    if is_global:
+        global_path = _get_global_config_path()
+        if not force and global_path.exists():
+            if non_interactive or not click.confirm(
+                f"Global config already exists at {global_path}. Re-initialize?", default=False
+            ):
+                click.echo("Aborted. Use --force to overwrite.")
+                return
+        init_global_directories(force=force)
+        click.echo(f"Global config written to: {global_path}")
+        return
+
+    # Project init
+    project_yaml = Path.cwd() / "telos.yaml"
+    if not force and project_yaml.exists():
+        if non_interactive or not click.confirm("telos.yaml already exists. Re-run setup?", default=False):
+            click.echo("Aborted. Use --force to overwrite.")
             return
 
     if not non_interactive:
@@ -142,13 +161,11 @@ def init(force, non_interactive):
             default=initial_intent,
         )
 
-    init_directories(force=force)
+    init_project_directories(force=force)
     from .config import reload_settings
     s = reload_settings()
     s.initial_intent = initial_intent
-    s.llm.producer_model = "openrouter/deepseek/deepseek-chat-v3-0324"
-    s.llm.goal_gen_model = "openrouter/deepseek/deepseek-chat-v3-0324"
-    s.llm.critic_model = "openrouter/deepseek/deepseek-chat-v3-0324"
+    # Models are kept as Pydantic defaults — user edits telos.yaml or sets env vars
     s.save()
     reload_settings()
 

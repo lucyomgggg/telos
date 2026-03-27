@@ -175,7 +175,8 @@ The active project is stored in `.env.local` as `TELOS_HOME`. Every command oper
 
 | Command | Description |
 |:---|:---|
-| `telos init [--force] [--non-interactive]` | Interactive setup wizard (API key, intent, Docker, embedding model). `--force` re-runs without confirmation; `--non-interactive` skips all prompts (CI mode). |
+| `telos init [--force] [--non-interactive]` | Initialize a project in the current directory (`telos.yaml`). `--force` overwrites; `--non-interactive` skips prompts (CI mode). |
+| `telos init --global [--force]` | Initialize the global machine config (`~/.config/telos/config.yaml`). Run once per machine. |
 | `telos start` | Run autonomous loops. Options: `--loops N`, `--name`, `--model`. Runs a pre-flight API key check before starting. |
 | `telos stop` | Stop a running loop gracefully. |
 | `telos status` | Show session history. Add `--loops` for individual loop view. |
@@ -195,6 +196,36 @@ The active project is stored in `.env.local` as `TELOS_HOME`. Every command oper
 
 ## Configuration
 
-- **`config.yaml`**: Main settings for models, limits, and sandbox parameters.
-- **`rubric.json`**: Definition of the scoring criteria used by the Critic.
+Telos uses a **two-tier configuration system**:
+
+| File | Location | Purpose | Git-tracked? |
+|:---|:---|:---|:---|
+| `~/.config/telos/config.yaml` | Global (machine-wide) | Infrastructure: Qdrant URL, Docker, logging, cost limits | No |
+| `telos.yaml` | Project root | Project-specific: intent, models, memory, rubric | Yes |
+
+Settings are merged in this priority order (highest wins):
+
+```
+Environment variables
+    ↓
+telos.yaml  (searched upward from CWD)
+    ↓
+~/.config/telos/config.yaml
+    ↓
+Pydantic defaults
+```
+
+Initialize global config once per machine:
+```bash
+telos init --global
+```
+
+Initialize a new project directory:
+```bash
+mkdir my-project && cd my-project
+telos init
+```
+
+Other configuration files:
+- **`rubric.json`**: Scoring criteria used by the Critic.
 - **`templates/`**: System prompts that define the Producer and Critic personalities.

@@ -1,4 +1,5 @@
 import os
+import warnings
 import yaml
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -9,25 +10,71 @@ _settings_cache = None
 
 # --- Paths ---
 PROJECT_ROOT = Path.cwd()
-LOCAL_CONFIG = PROJECT_ROOT / "config.yaml"
-# All data lives inside a named project under projects/.
-# TELOS_HOME can be overridden via env var (written to .env.local by `telos project switch`).
-TELOS_HOME = Path(os.getenv("TELOS_HOME", PROJECT_ROOT / "projects" / "main"))
+
 def _safe_exists(p: Path) -> bool:
     try:
         return p.exists()
     except PermissionError:
         return False
 
-CONFIG_PATH = LOCAL_CONFIG if _safe_exists(LOCAL_CONFIG) else (TELOS_HOME / "config.yaml")
 
-# Fallback for creating new config
-if not _safe_exists(CONFIG_PATH):
-    CONFIG_PATH = LOCAL_CONFIG
+def _find_project_config(start: Optional[Path] = None) -> Optional[Path]:
+    """Walk up from `start` (default: CWD) looking for telos.yaml.
+    Falls back to config.yaml with a DeprecationWarning for backward compat."""
+    current = Path(start or Path.cwd()).resolve()
+    while True:
+        candidate = current / "telos.yaml"
+        if _safe_exists(candidate):
+            return candidate
+        legacy = current / "config.yaml"
+        if _safe_exists(legacy):
+            warnings.warn(
+                f"'{legacy}' is deprecated. Rename to 'telos.yaml'.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return legacy
+        parent = current.parent
+        if parent == current:  # reached filesystem root
+            return None
+        current = parent
+
+
+def _get_global_config_path() -> Path:
+    """Return the global config path, overridable via TELOS_GLOBAL_CONFIG env var."""
+    default = Path.home() / ".config" / "telos" / "config.yaml"
+    return Path(os.getenv("TELOS_GLOBAL_CONFIG", str(default)))
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge override into base. Override wins on conflicts."""
+    result = base.copy()
+    for k, v in override.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
+# --- Module-level globals (computed once at import) ---
+_project_config_path: Optional[Path] = _find_project_config()
+_project_dir: Path = _project_config_path.parent if _project_config_path else PROJECT_ROOT
+
+# TELOS_HOME: env var > telos.yaml dir/data > legacy projects/main (backward compat)
+_legacy_home = PROJECT_ROOT / "projects" / "main"
+TELOS_HOME = Path(os.getenv(
+    "TELOS_HOME",
+    str(_legacy_home) if _safe_exists(_legacy_home) else str(_project_dir / "data")
+))
+
+# CONFIG_PATH: where Settings.save() writes (always project config, never global)
+CONFIG_PATH = _project_config_path if _project_config_path is not None else (_project_dir / "telos.yaml")
 
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 LOG_FILE = TELOS_HOME / "agent.log"
 PID_FILE = TELOS_HOME / "telos.pid"
+
 
 class LLMSettings(BaseModel):
     model: str = Field(default="gemini/gemini-flash-latest", description="Default model (fallback)")
@@ -90,45 +137,65 @@ class Settings(BaseModel):
         global _settings_cache
         if _settings_cache:
             return _settings_cache
-            
-        data = {}
-        if CONFIG_PATH.exists():
-            try:
-                with open(CONFIG_PATH, "r") as f:
-                    data = yaml.safe_load(f) or {}
-            except Exception:
-                pass
-        
-        settings = cls(**data)
-        
-        # Environment Variable Overrides
-        if env_model := os.getenv("TELOS_PRODUCER_MODEL"):
-            settings.llm.producer_model = env_model
-        if env_critic_model := os.getenv("TELOS_CRITIC_MODEL"):
-            settings.llm.critic_model = env_critic_model
-        if env_embed := os.getenv("TELOS_EMBEDDING_MODEL"):
-            settings.memory.embedding_model = env_embed
-        if env_qdrant := os.getenv("QDRANT_URL"):
-            settings.memory.qdrant_url = env_qdrant
-        if env_docker := os.getenv("TELOS_USE_DOCKER"):
-            settings.sandbox.use_docker = env_docker.lower() == "true"
-
-        # Workspace is always scoped to the active project (TELOS_HOME).
-        # This overrides the config.yaml value so each project has isolated workspace.
-        settings.memory.workspace_path = str(TELOS_HOME / "workspace")
-
-        _settings_cache = settings
-        return settings
+        _settings_cache = load_settings()
+        return _settings_cache
 
     def save(self):
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(CONFIG_PATH, "w") as f:
+        """Write to the project config file (telos.yaml), never to global config."""
+        path = CONFIG_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
             yaml.dump(self.model_dump(), f, sort_keys=False)
+
+
+def load_settings() -> Settings:
+    """Load settings by merging: global config -> project config -> env vars."""
+    data: dict = {}
+
+    # 1. Load global config as base
+    global_path = _get_global_config_path()
+    if global_path.exists():
+        try:
+            with open(global_path) as f:
+                data = yaml.safe_load(f) or {}
+        except Exception:
+            pass
+
+    # 2. Deep-merge project config on top
+    project_path = _find_project_config()
+    if project_path and project_path.exists():
+        try:
+            with open(project_path) as f:
+                project_data = yaml.safe_load(f) or {}
+            data = _deep_merge(data, project_data)
+        except Exception:
+            pass
+
+    s = Settings(**data)
+
+    # 3. Apply environment variable overrides last
+    if v := os.getenv("TELOS_PRODUCER_MODEL"):
+        s.llm.producer_model = v
+    if v := os.getenv("TELOS_CRITIC_MODEL"):
+        s.llm.critic_model = v
+    if v := os.getenv("TELOS_EMBEDDING_MODEL"):
+        s.memory.embedding_model = v
+    if v := os.getenv("QDRANT_URL"):
+        s.memory.qdrant_url = v
+    if v := os.getenv("TELOS_USE_DOCKER"):
+        s.sandbox.use_docker = v.lower() == "true"
+
+    # Workspace is always scoped to the active project (TELOS_HOME).
+    s.memory.workspace_path = str(TELOS_HOME / "workspace")
+
+    return s
+
 
 # Global settings instance
 settings = Settings.load()
 
-def reload_settings() -> "Settings":
+
+def reload_settings() -> Settings:
     """Bust the settings cache and reload from disk. Useful after config changes."""
     global _settings_cache
     _settings_cache = None
@@ -163,14 +230,44 @@ HF_TOKEN=
         with open(env_example_path, "w") as f:
             f.write(content)
 
-def init_directories(force: bool = False):
-    """Initialize Telos home and default templates/config."""
+
+def init_global_directories(force: bool = False):
+    """Initialize the global config file at ~/.config/telos/config.yaml."""
+    global_path = _get_global_config_path()
+    global_path.parent.mkdir(parents=True, exist_ok=True)
+    if force or not global_path.exists():
+        global_defaults = {
+            "memory": {"qdrant_url": "http://localhost:6333"},
+            "sandbox": {
+                "image": "telos-sandbox:latest",
+                "container_name": "telos-agent-sandbox",
+                "use_docker": True,
+                "memory_limit": "1024m",
+                "timeout": 300,
+            },
+            "logging": {"level": "INFO"},
+            "daily_loop_limit": 1000,
+            "monthly_cost_limit": 20.0,
+        }
+        with open(global_path, "w") as f:
+            yaml.dump(global_defaults, f, sort_keys=False)
+
+
+def init_project_directories(force: bool = False):
+    """Create project directory structure. telos.yaml is only written if absent (or forced)."""
     TELOS_HOME.mkdir(parents=True, exist_ok=True)
     TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
-    
     generate_env_example()
-    
-    # Save default config if not exists or if forced
-    if force or not CONFIG_PATH.exists():
+    # Only write telos.yaml when explicitly initializing (not on every import)
+    project_yaml = _project_dir / "telos.yaml"
+    if force or not project_yaml.exists():
         settings.save()
 
+
+def init_directories(force: bool = False):
+    """Backward-compat wrapper: initialize project directories only."""
+    TELOS_HOME.mkdir(parents=True, exist_ok=True)
+    TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+    generate_env_example()
+    # Do NOT auto-create telos.yaml here — only `telos init` should do that.
+    # For backward compat: if config.yaml exists we've already loaded it; nothing to do.
