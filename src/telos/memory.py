@@ -91,43 +91,46 @@ class MemoryStore:
         finally:
             session.close()
 
-    def get_quality_history(self, top_n: int = 10, recent_failures: int = 5, recent_n: int = 5) -> list[dict]:
-        """Fetch a quality-weighted mix of history: high-scoring, recent failures, and recent loops.
+    def get_quality_history(self, recent_n: int = 10) -> list[dict]:
+        """Fetch recent loop history for goal generation context.
 
-        This replaces a naive 'last N' window with a signal-dense context:
-        - top_n: loops with score >= 0.7 (success patterns)
-        - recent_failures: most recent loops with score < 0.3 (what to avoid)
-        - recent_n: most recent loops regardless of score (temporal continuity)
+        Returns loops in chronological order with instinct signals where available.
+        Prioritizes failed loops (for lesson injection) and recent completed loops.
         """
         session = self.Session()
         try:
-            top = (session.query(LoopRecord)
-                   .filter(LoopRecord.score >= 0.7)
-                   .order_by(LoopRecord.score.desc())
-                   .limit(top_n).all())
+            from .db_models import InstinctState
 
+            # Recent failures for lesson injection
             failures = (session.query(LoopRecord)
-                        .filter(LoopRecord.score < 0.3)
+                        .filter(LoopRecord.status == "failed")
                         .order_by(LoopRecord.created_at.desc())
-                        .limit(recent_failures).all())
+                        .limit(5).all())
 
+            # Recent loops for temporal continuity
             recent = (session.query(LoopRecord)
                       .order_by(LoopRecord.created_at.desc())
                       .limit(recent_n).all())
 
             seen: set = set()
             merged: list = []
-            for r in top + failures + recent:
+            for r in failures + recent:
                 if r.id not in seen:
                     seen.add(r.id)
+                    # Try to load associated instinct state
+                    instinct_rec = session.query(InstinctState).filter_by(loop_id=r.id).first()
+                    instincts = instinct_rec.to_dict() if instinct_rec else {}
                     merged.append({
                         "goal": r.goal,
-                        "score": r.score,
-                        "reasoning": r.reasoning,
+                        "status": r.status,
                         "error": r.error,
                         "tokens_used": r.tokens_used,
+                        "instincts": instincts,
+                        # Keep score for backward compat with deduplicator/other callers
+                        "score": r.score,
                     })
-            return merged
+            # Return in chronological order
+            return list(reversed(merged))
         finally:
             session.close()
 
@@ -361,21 +364,19 @@ class MemoryStore:
         from sqlalchemy import func, case
         session = self.Session()
         try:
-            total, avg_score, total_cost, high_count, fail_count = session.query(
+            total, total_cost, completed_count, failed_count = session.query(
                 func.count(LoopRecord.id),
-                func.avg(LoopRecord.score),
                 func.sum(LoopRecord.cost_usd),
-                func.sum(case((LoopRecord.score >= 0.7, 1), else_=0)),
-                func.sum(case((LoopRecord.score <= 0.3, 1), else_=0)),
+                func.sum(case((LoopRecord.status == "completed", 1), else_=0)),
+                func.sum(case((LoopRecord.status == "failed", 1), else_=0)),
             ).one()
             total = int(total or 0)
             return {
                 "total_loops": total,
-                "avg_score": round(float(avg_score or 0.0), 3),
                 "total_cost_usd": round(float(total_cost or 0.0), 6),
-                "high_score_count": int(high_count or 0),
-                "failure_count": int(fail_count or 0),
-                "high_score_rate": round(int(high_count or 0) / total * 100, 1) if total > 0 else 0.0,
+                "completed_count": int(completed_count or 0),
+                "failure_count": int(failed_count or 0),
+                "success_rate": round(int(completed_count or 0) / total * 100, 1) if total > 0 else 0.0,
             }
         finally:
             session.close()

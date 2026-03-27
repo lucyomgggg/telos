@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Dict, Optional
 
 
 class JournalWriter:
@@ -19,47 +20,55 @@ class JournalWriter:
     def write_loop(
         self,
         loop_num: int,
-        score: float,
         goal: str,
-        result: str,
-        reasoning: str,
+        output_path: str,
+        instincts_pre: Dict[str, float],
+        instincts_post: Dict[str, float],
+        output_stats: Optional[Dict] = None,
     ) -> None:
-        icon = "✅" if score >= 0.5 else "❌"
-        result_text = self._format_result(result, reasoning)
-        reasoning_text = self._first_sentences(reasoning, max_chars=200)
+        def fmt(d: Dict) -> str:
+            return (
+                f"curiosity={d.get('curiosity', 0):.2f} | "
+                f"preservation={d.get('preservation', 0):.2f} | "
+                f"growth={d.get('growth', 0):.2f} | "
+                f"order={d.get('order', 0):.2f}"
+            )
+
+        stats_text = ""
+        if output_stats:
+            loc = output_stats.get("loc", 0)
+            funcs = output_stats.get("function_count", 0)
+            imports = output_stats.get("import_count", 0)
+            builds = output_stats.get("builds_on_previous", False)
+            stats_text = f"\n**Output:** {loc} LOC, {funcs} functions, {imports} imports"
+            if builds:
+                stats_text += ", builds on previous work"
+
         with open(self.path, "a", encoding="utf-8") as f:
-            f.write(f"### Loop {loop_num} {icon} {score:.2f}\n")
+            f.write(f"### Loop {loop_num}\n")
             f.write(f"**Goal:** {goal}\n")
-            f.write(f"**Result:** {result_text}\n")
-            f.write(f"**Reasoning:** {reasoning_text}\n\n")
+            f.write(f"**Pre-instincts:** {fmt(instincts_pre)}\n")
+            f.write(f"**Post-instincts:** {fmt(instincts_post)}\n")
+            if output_path:
+                f.write(f"**Artifact:** {output_path.strip()[:200]}\n")
+            if stats_text:
+                f.write(f"{stats_text}\n")
+            f.write("\n")
 
-    def write_session_summary(self, loops: int, avg_score: float, cost_usd: float) -> None:
+    def write_session_summary(
+        self,
+        loops: int,
+        cost_usd: float,
+        final_instincts: Optional[Dict[str, float]] = None,
+    ) -> None:
+        instinct_str = ""
+        if final_instincts:
+            instinct_str = (
+                f" | final instincts: "
+                f"C={final_instincts.get('curiosity', 0):.2f} "
+                f"P={final_instincts.get('preservation', 0):.2f} "
+                f"G={final_instincts.get('growth', 0):.2f} "
+                f"O={final_instincts.get('order', 0):.2f}"
+            )
         with open(self.path, "a", encoding="utf-8") as f:
-            f.write(f"---\n**Session Summary:** {loops} loops | avg score: {avg_score:.2f} | cost: ${cost_usd:.3f}\n---\n")
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _format_result(self, output_path: str, reasoning: str) -> str:
-        """Use output_path if present, otherwise fall back to reasoning excerpt."""
-        if output_path and output_path.strip():
-            return output_path.strip()[:200]
-        return self._first_sentences(reasoning, max_chars=200)
-
-    @staticmethod
-    def _first_sentences(text: str, max_chars: int = 200) -> str:
-        """Return the first 1-2 sentences of text, truncated at max_chars."""
-        if not text:
-            return ""
-        # Split on sentence-ending punctuation followed by whitespace
-        sentences = re.split(r"(?<=[。．.!?！？])\s*", text.strip())
-        result = ""
-        for s in sentences[:2]:
-            candidate = (result + " " + s).strip() if result else s
-            if len(candidate) > max_chars:
-                return (result or candidate[:max_chars]).rstrip() + "..."
-            result = candidate
-        if len(result) > max_chars:
-            return result[:max_chars].rstrip() + "..."
-        return result
+            f.write(f"---\n**Session Summary:** {loops} loops | cost: ${cost_usd:.3f}{instinct_str}\n---\n")

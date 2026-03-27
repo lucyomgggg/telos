@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Float, Integer, DateTime, JSON, Text, Index
+from sqlalchemy import Column, String, Float, Integer, Boolean, DateTime, JSON, Text, Index, ForeignKey
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -57,6 +57,14 @@ class LoopRecord(Base):
     criteria_met = Column(JSON, nullable=True)
     messages = Column(JSON, nullable=True)             # Full interaction trace (for 'explain')
     session_id = Column(String, nullable=True)
+    # Instinct-related execution metrics
+    exit_code = Column(Integer, nullable=True)
+    execution_time_ms = Column(Integer, nullable=True)
+    memory_peak_bytes = Column(Integer, nullable=True)
+    loc = Column(Integer, nullable=True)
+    function_count = Column(Integer, nullable=True)
+    import_count = Column(Integer, nullable=True)
+    builds_on_previous = Column(Boolean, nullable=True)
 
     __table_args__ = (Index('ix_loops_created_at', 'created_at'),)
 
@@ -76,6 +84,32 @@ class LoopRecord(Base):
             "reasoning": self.reasoning,
             "result": self.result,
             "session_id": self.session_id,
+            "exit_code": self.exit_code,
+            "execution_time_ms": self.execution_time_ms,
+            "loc": self.loc,
+            "function_count": self.function_count,
+            "import_count": self.import_count,
+            "builds_on_previous": self.builds_on_previous,
+        }
+
+
+class InstinctState(Base):
+    __tablename__ = 'instinct_states'
+
+    loop_id = Column(String, ForeignKey('loops.id'), primary_key=True)
+    curiosity = Column(Float, nullable=True)
+    preservation = Column(Float, nullable=True)
+    growth = Column(Float, nullable=True)
+    order_drive = Column(Float, nullable=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+    def to_dict(self):
+        return {
+            "loop_id": self.loop_id,
+            "curiosity": self.curiosity,
+            "preservation": self.preservation,
+            "growth": self.growth,
+            "order": self.order_drive,
         }
 
 class AuditLog(Base):

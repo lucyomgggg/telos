@@ -40,7 +40,6 @@ def _deep_merge(base: dict, override: dict) -> dict:
 class LLMSettings(BaseModel):
     model: str = Field(default="gemini/gemini-flash-latest", description="Default model (fallback)")
     producer_model: str = Field(default="gemini/gemini-flash-latest", description="Model for the Producer agent")
-    critic_model: str = Field(default="gemini/gemini-flash-latest", description="Model for the Critic agent")
     goal_gen_model: Optional[str] = Field(default=None, description="Dedicated model for goal generation (falls back to producer_model if None)")
     max_tokens_per_loop: int = Field(default=8000, description="Token limit per loop iteration")
 
@@ -62,9 +61,6 @@ class SandboxSettings(BaseModel):
     memory_limit: str = Field(default="512m", description="Docker memory limit (e.g., 512m, 1g)")
     timeout: int = Field(default=300, description="Hard timeout for sandbox commands in seconds")
 
-class CriticSettings(BaseModel):
-    rubric_path: Optional[str] = Field(default=None, description="Path to custom evaluation rubric JSON")
-
 class LoggingSettings(BaseModel):
     level: str = Field(default="INFO", description="Console log level (DEBUG, INFO, WARNING, ERROR)")
 
@@ -72,13 +68,11 @@ class Settings(BaseModel):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
-    critic: CriticSettings = Field(default_factory=CriticSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     initial_intent: str = Field(default="Establish existence and evolve.", description="Default ambient intent for the agent")
     history_limit: int = Field(default=20, description="Max recent loops to consider for context")
     similar_artifacts_limit: int = Field(default=3, description="Max similar artifacts to retrieve from vector memory")
-    failure_threshold: float = Field(default=0.3, description="Scores below this are considered failures for lesson learning")
-    max_lessons: int = Field(default=2, description="Maximum number of lessons to inject into the producer prompt")
+    max_lessons: int = Field(default=2, description="Maximum number of failed-loop lessons to inject into the producer prompt")
     daily_loop_limit: int = Field(default=10, description="Max loops per day")
     monthly_cost_limit: float = Field(default=50.0, description="Max USD budget per month")
     rate_limit_delay: float = Field(default=6.0, description="Seconds to wait between LLM calls")
@@ -134,8 +128,6 @@ def load_settings() -> Settings:
     # 3. Environment variable overrides (highest priority)
     if v := os.getenv("TELOS_PRODUCER_MODEL"):
         s.llm.producer_model = v
-    if v := os.getenv("TELOS_CRITIC_MODEL"):
-        s.llm.critic_model = v
     if v := os.getenv("TELOS_EMBEDDING_MODEL"):
         s.memory.embedding_model = v
     if v := os.getenv("QDRANT_URL"):

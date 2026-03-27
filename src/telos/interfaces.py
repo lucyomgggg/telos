@@ -5,6 +5,7 @@ from .logger import get_logger
 
 log = get_logger("base")
 
+
 class Tool(ABC):
     @abstractmethod
     def execute(self, params: Dict[str, Any]) -> str:
@@ -17,11 +18,6 @@ class Tool(ABC):
         """Returns the litellm-compatible tool definition."""
         pass
 
-class Critic(ABC):
-    @abstractmethod
-    def evaluate(self, goal: Any, artifact_path: str, sandbox=None, loop_id: str = "unknown") -> Dict[str, Any]:
-        """Evaluate the result and return a score breakdown."""
-        pass
 
 class TemplateLoader:
     @staticmethod

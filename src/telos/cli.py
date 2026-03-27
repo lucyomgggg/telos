@@ -175,7 +175,6 @@ def _preflight_check():
         models = [m for m in [
             s.llm.producer_model,
             s.llm.goal_gen_model,
-            s.llm.critic_model,
         ] if m is not None]
     except Exception:
         click.echo("❌ config.yaml not found or invalid.")
@@ -227,7 +226,6 @@ def start(model, loops, name):
     PID_FILE.write_text(str(os.getpid()))
     session_cost = 0.0
     completed = 0
-    scores = []
     print(f"[Telos] Session started: {agent.session_id[:8]} | {selected_model}")
     try:
         for i in range(loops):
@@ -237,20 +235,25 @@ def start(model, loops, name):
             loop_cost = loop_data.get("cost_usd", 0.0) or 0.0
             session_cost += loop_cost
             completed += 1
-            score = loop_data.get("score") or 0.0
-            scores.append(score)
 
+            status = loop_data.get("status", "completed")
+            icon = "✅" if status == "completed" else "❌"
+            post = loop_data.get("instincts_post", {})
+            instinct_str = (
+                f"C={post.get('curiosity', 0):.2f} "
+                f"P={post.get('preservation', 0):.2f} "
+                f"G={post.get('growth', 0):.2f} "
+                f"O={post.get('order', 0):.2f}"
+            )
             print(f"[Loop {i+1}] Goal: {loop_data['goal']}")
-            icon = "✅" if score >= 0.5 else "❌"
-            print(f"[Loop {i+1}] {icon} {score:.2f} — {loop_data['goal']}")
+            print(f"[Loop {i+1}] {icon} instincts: {instinct_str}")
 
     except KeyboardInterrupt:
         print("\n[Telos] Interrupted.")
     except Exception as e:
         print(f"[Loop error] {e}")
     finally:
-        avg = sum(scores) / len(scores) if scores else 0.0
-        print(f"[Session] Complete: {completed} loops | avg: {avg:.2f} | ${session_cost:.3f} | JOURNAL updated")
+        print(f"[Session] Complete: {completed} loops | ${session_cost:.3f} | JOURNAL updated")
         agent.shutdown()
         PID_FILE.unlink(missing_ok=True)
 
