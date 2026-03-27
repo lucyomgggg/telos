@@ -1,4 +1,13 @@
 import os
+import warnings
+import logging
+
+os.environ.setdefault("LITELLM_LOG", "ERROR")
+warnings.filterwarnings("ignore", module="litellm")
+logging.getLogger("litellm").setLevel(logging.CRITICAL)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("httpcore").setLevel(logging.ERROR)
+
 import time
 import json
 import re

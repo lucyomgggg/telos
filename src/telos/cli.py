@@ -1,5 +1,17 @@
 import os
+import sys
 import signal
+import warnings
+import logging
+
+os.environ.setdefault("LITELLM_LOG", "ERROR")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+warnings.filterwarnings("ignore", module="litellm")
+logging.getLogger("litellm").setLevel(logging.CRITICAL)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("httpcore").setLevel(logging.ERROR)
+
 from pathlib import Path
 import click
 from dotenv import load_dotenv
@@ -8,7 +20,7 @@ from dotenv import load_dotenv
 load_dotenv()
 load_dotenv(".env.local")
 
-from .config import init_directories, PID_FILE, LOG_FILE, TELOS_HOME, settings
+from .config import init_directories, PID_FILE, LOG_FILE, TELOS_HOME, CONFIG_PATH, settings
 
 # Ensure directories and default config exist on import or explicitly via init
 init_directories()
@@ -26,20 +38,164 @@ def cli():
     """
     pass
 
+def _wizard_api_key():
+    """Prompt for OpenRouter API key, validate, and write to .env."""
+    from dotenv import set_key
+    load_dotenv()
+    existing = os.getenv("OPENROUTER_API_KEY", "")
+
+    for attempt in range(3):
+        default_display = f" (current: ...{existing[-6:]})" if existing else ""
+        key = click.prompt(
+            f"\n? OpenRouter API key{default_display}",
+            default=existing or "",
+            hide_input=True,
+        )
+        if not key:
+            click.echo("  Skipped.")
+            return
+
+        click.echo("  Verifying...", nl=False)
+        try:
+            import litellm
+            litellm.completion(
+                model="openrouter/deepseek/deepseek-chat-v3-0324",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=1,
+                api_key=key,
+            )
+            env_path = Path(".env")
+            if not env_path.exists():
+                env_path.touch()
+            set_key(str(env_path), "OPENROUTER_API_KEY", key)
+            os.environ["OPENROUTER_API_KEY"] = key
+            click.echo(" ✅")
+            return
+        except Exception:
+            click.echo(" ❌ (Authentication failed. Check your key.)")
+            if attempt < 2:
+                click.echo(f"  Retrying ({attempt + 2}/3)...")
+
+    if click.confirm("\n  Skip and set manually later?", default=True):
+        click.echo("  Add OPENROUTER_API_KEY to .env and re-run.")
+
+
+def _wizard_docker():
+    import subprocess
+    click.echo("\nChecking Docker...", nl=False)
+    try:
+        result = subprocess.run(
+            ["docker", "info"], capture_output=True, timeout=10
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        result = None
+
+    if result is None or result.returncode != 0:
+        click.echo(
+            "\n⚠️  Docker not found. Running in local sandbox mode (no isolation).\n"
+            "   Install Docker for a safer execution environment."
+        )
+        return
+
+    click.echo(" found ✅")
+    click.echo("Running: docker compose up -d (Qdrant)...", nl=False)
+    r = subprocess.run(["docker", "compose", "up", "-d"], capture_output=True)
+    if r.returncode == 0:
+        click.echo(" done ✅")
+    else:
+        click.echo(" ⚠️  (failed, continuing)")
+
+
+def _wizard_embedding_model():
+    click.echo("\nDownloading embedding model (first time only, ~90MB)...")
+    try:
+        from sentence_transformers import SentenceTransformer
+        SentenceTransformer("all-MiniLM-L6-v2")
+        click.echo("Embedding model... done ✅")
+    except Exception as e:
+        click.echo(f"⚠️  Embedding model download failed: {e}")
+
+
 @cli.command()
 @click.option('--force', is_flag=True, help='Overwrite existing config files.')
-def init(force):
-    """Set up config files and the default project directory."""
+@click.option('--non-interactive', 'non_interactive', is_flag=True, help='Skip all prompts (CI mode).')
+def init(force, non_interactive):
+    """Interactive setup wizard. Run once after installation."""
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "0"
+
+    click.echo("\nWelcome to Telos — Autonomous AI Runtime\n")
+
+    if not force and not non_interactive and CONFIG_PATH.exists():
+        if not click.confirm("Already initialized. Re-run setup?", default=False):
+            click.echo("Aborted.")
+            return
+
+    if not non_interactive:
+        _wizard_api_key()
+
+    initial_intent = "Build useful tools and explore the system."
+    if not non_interactive:
+        initial_intent = click.prompt(
+            "\n? What should the AI work on?",
+            default=initial_intent,
+        )
+
     init_directories(force=force)
-    # Ensure the active project directory exists
+    from .config import reload_settings
+    s = reload_settings()
+    s.initial_intent = initial_intent
+    s.llm.producer_model = "openrouter/deepseek/deepseek-chat-v3-0324"
+    s.llm.goal_gen_model = "openrouter/deepseek/deepseek-chat-v3-0324"
+    s.llm.critic_model = "openrouter/deepseek/deepseek-chat-v3-0324"
+    s.save()
+    reload_settings()
+
     TELOS_HOME.mkdir(parents=True, exist_ok=True)
     (TELOS_HOME / "workspace" / "persistent").mkdir(parents=True, exist_ok=True)
-    click.echo(f"Initialized. Active project: {click.style(_active_project_name(), fg='cyan', bold=True)}")
-    click.echo(f"  Data directory: {TELOS_HOME}")
-    click.echo("\nNext steps:")
-    click.echo("  1. Copy .env.example to .env and add your API keys.")
-    click.echo("  2. Edit config.yaml to set your initial_intent and models.")
-    click.echo("  3. Run: telos start --loops 1")
+    click.echo("Creating project structure... done ✅")
+
+    _wizard_docker()
+    _wizard_embedding_model()
+
+    click.echo("\n" + "═" * 36)
+    click.echo("  Telos is ready.")
+    click.echo("  Run: telos start --loops 10")
+    click.echo("═" * 36 + "\n")
+
+def _preflight_check():
+    """Verify API keys are set for all configured models."""
+    load_dotenv()
+    load_dotenv(".env.local")
+
+    try:
+        from .config import reload_settings
+        s = reload_settings()
+        models = [m for m in [
+            s.llm.producer_model,
+            s.llm.goal_gen_model,
+            s.llm.critic_model,
+        ] if m is not None]
+    except Exception:
+        click.echo("❌ config.yaml not found or invalid.")
+        click.echo("   Run: telos init")
+        sys.exit(1)
+
+    def get_expected_key(model: str) -> str:
+        provider = model.split("/")[0].upper()
+        return f"{provider}_API_KEY"
+
+    missing = []
+    for model in set(models):
+        key_name = get_expected_key(model)
+        if not os.getenv(key_name):
+            missing.append((model, key_name))
+
+    if missing:
+        for model, key_name in missing:
+            click.echo(f"❌ {key_name} is not set (required for {model})")
+        click.echo("   Run: telos init")
+        sys.exit(1)
+
 
 @cli.command()
 @click.option('--loops', '-n', default=1, type=int, help='Number of loops to run.  [default: 1]')
@@ -47,6 +203,8 @@ def init(force):
 @click.option('--model', default=None, help='Override producer model (default: from config.yaml).')
 def start(model, loops, name):
     """Run autonomous loops."""
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    _preflight_check()
     from .telos_core import AgentLoop
     from .config import PID_FILE
 

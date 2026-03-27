@@ -80,49 +80,44 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
-### 2. Start infrastructure (Docker)
-
-Telos requires **Qdrant** (vector store) and a **sandbox** container to run.
-
-```bash
-# Start Qdrant + sandbox in the background
-docker compose up -d
-
-# Verify both services are healthy
-docker compose ps
-```
-
-Services started:
-- **qdrant** — vector database on `localhost:6333` (REST) and `localhost:6334` (gRPC)
-- **telos-agent-sandbox** — isolated code-execution container mounted to `./workspace`
-
-To stop:
-```bash
-docker compose down
-```
-
-### 3. Configure environment
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and fill in at least one LLM API key:
-
-```dotenv
-# Choose one or more providers
-GEMINI_API_KEY=your-key-here
-OPENAI_API_KEY=your-key-here
-ANTHROPIC_API_KEY=your-key-here
-
-# Qdrant (default points to the Docker service above)
-QDRANT_URL=http://localhost:6333
-```
-
-### 4. Initialize Telos
+### 2. Run the setup wizard
 ```bash
 telos init
 ```
-This creates the necessary directories (`data/`, `workspace/`, `outputs/`) and the default project structure.
+
+The wizard will guide you through:
+1. **API key** — enter your OpenRouter key and it's validated and saved to `.env` automatically
+2. **Initial intent** — set what the AI should work on (e.g. `"Build useful tools and explore the system."`)
+3. **Docker** — Qdrant is started automatically if Docker is available; if not, Telos falls back to local sandbox mode
+4. **Embedding model** — `all-MiniLM-L6-v2` is downloaded on first run (~90 MB)
+
+```
+$ telos init
+
+Welcome to Telos — Autonomous AI Runtime
+
+? OpenRouter API key: sk-or-...
+  Verifying... ✅
+
+? What should the AI work on?
+  > Build useful tools and explore the system.
+
+Creating project structure... done ✅
+
+Checking Docker... found ✅
+Running: docker compose up -d (Qdrant)... done ✅
+
+Downloading embedding model (first time only, ~90MB)...
+Embedding model... done ✅
+
+════════════════════════════════
+  Telos is ready.
+  Run: telos start --loops 10
+════════════════════════════════
+```
+
+> **OpenRouter is recommended** — one key gives access to all models (DeepSeek, Claude, Gemini, etc.).
+> Get yours at https://openrouter.ai/keys
 
 ---
 
@@ -180,8 +175,8 @@ The active project is stored in `.env.local` as `TELOS_HOME`. Every command oper
 
 | Command | Description |
 |:---|:---|
-| `telos init` | Set up config files and the default project directory. |
-| `telos start` | Run autonomous loops. Options: `--loops N`, `--name`, `--model`, `--verbose`. |
+| `telos init [--force] [--non-interactive]` | Interactive setup wizard (API key, intent, Docker, embedding model). `--force` re-runs without confirmation; `--non-interactive` skips all prompts (CI mode). |
+| `telos start` | Run autonomous loops. Options: `--loops N`, `--name`, `--model`. Runs a pre-flight API key check before starting. |
 | `telos stop` | Stop a running loop gracefully. |
 | `telos status` | Show session history. Add `--loops` for individual loop view. |
 | `telos show [LOOP_ID]` | Inspect a loop result. Add `--explain` for LLM narrative. |
