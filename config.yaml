@@ -1,0 +1,19 @@
+# config.yaml — インフラ設定
+# Qdrant、Docker、ログ、コスト上限など。基本的に触らない。
+# プロジェクト設定（モデル、intent）は telos.yaml を編集すること。
+
+memory:
+  qdrant_url: http://localhost:6333
+
+sandbox:
+  image: telos-sandbox:latest
+  container_name: telos-agent-sandbox
+  use_docker: true
+  memory_limit: 1024m
+  timeout: 300
+
+logging:
+  level: INFO
+
+daily_loop_limit: 1000
+monthly_cost_limit: 20.0

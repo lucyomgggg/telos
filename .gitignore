@@ -35,5 +35,4 @@ report_*.md
 # Tests
 .pytest_cache/
 
-# Project-specific config (user-edited, not committed)
-config.yaml
+# config.yaml (infra) and telos.yaml (project settings) are both git-tracked

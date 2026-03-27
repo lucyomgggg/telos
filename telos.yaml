@@ -1,0 +1,32 @@
+# telos.yaml — プロジェクト設定
+# モデルの選択、initial intent、メモリパラメータなど。ユーザーが編集する。
+# インフラ設定（Qdrant、Docker）は config.yaml を参照。
+
+initial_intent: "Build useful tools and utilities. Write code, test it, improve it."
+
+llm:
+  producer_model: openrouter/deepseek/deepseek-chat-v3-0324
+  goal_gen_model: openrouter/deepseek/deepseek-chat-v3-0324
+  critic_model: openrouter/deepseek/deepseek-chat-v3-0324
+  max_tokens_per_loop: 150000
+
+memory:
+  collection_name: telos_artifacts
+  embedding_model: all-MiniLM-L6-v2
+  embedding_dimensions: 384
+  persistent_workspace_name: persistent
+
+critic:
+  rubric_path: rubric.json
+
+history_limit: 20
+similar_artifacts_limit: 3
+failure_threshold: 0.3
+max_lessons: 2
+rate_limit_delay: 2.0
+deduplication_threshold: 0.85
+
+model_cost_overrides:
+  deepseek/deepseek-chat-v3:
+    input_cost_per_million: 0.27
+    output_cost_per_million: 1.10

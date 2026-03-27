@@ -23,9 +23,8 @@ load_dotenv()
 load_dotenv(".env.local")
 
 from .config import (
-    init_directories, init_global_directories, init_project_directories,
-    _get_global_config_path,
-    PID_FILE, LOG_FILE, TELOS_HOME, CONFIG_PATH, settings,
+    init_directories,
+    PID_FILE, LOG_FILE, TELOS_HOME, PROJECT_CONFIG, PROJECT_ROOT, settings,
 )
 
 # Ensure directories and default config exist on import or explicitly via init
@@ -123,30 +122,15 @@ def _wizard_embedding_model():
 
 
 @cli.command()
-@click.option('--force', is_flag=True, help='Overwrite existing config files.')
+@click.option('--force', is_flag=True, help='Overwrite existing telos.yaml.')
 @click.option('--non-interactive', 'non_interactive', is_flag=True, help='Skip all prompts (CI mode).')
-@click.option('--global', 'is_global', is_flag=True, help='Initialize ~/.config/telos/config.yaml (global/machine config).')
-def init(force, non_interactive, is_global):
+def init(force, non_interactive):
     """Interactive setup wizard. Run once after installation."""
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "0"
 
     click.echo("\nWelcome to Telos — Autonomous AI Runtime\n")
 
-    if is_global:
-        global_path = _get_global_config_path()
-        if not force and global_path.exists():
-            if non_interactive or not click.confirm(
-                f"Global config already exists at {global_path}. Re-initialize?", default=False
-            ):
-                click.echo("Aborted. Use --force to overwrite.")
-                return
-        init_global_directories(force=force)
-        click.echo(f"Global config written to: {global_path}")
-        return
-
-    # Project init
-    project_yaml = Path.cwd() / "telos.yaml"
-    if not force and project_yaml.exists():
+    if not force and PROJECT_CONFIG.exists():
         if non_interactive or not click.confirm("telos.yaml already exists. Re-run setup?", default=False):
             click.echo("Aborted. Use --force to overwrite.")
             return
@@ -161,11 +145,10 @@ def init(force, non_interactive, is_global):
             default=initial_intent,
         )
 
-    init_project_directories(force=force)
+    init_directories(force=force)
     from .config import reload_settings
     s = reload_settings()
     s.initial_intent = initial_intent
-    # Models are kept as Pydantic defaults — user edits telos.yaml or sets env vars
     s.save()
     reload_settings()
 
@@ -219,10 +202,20 @@ def _preflight_check():
 @cli.command()
 @click.option('--loops', '-n', default=1, type=int, help='Number of loops to run.  [default: 1]')
 @click.option('--name', default=None, help='Session name (auto-generated if omitted).')
-@click.option('--model', default=None, help='Override producer model (default: from config.yaml).')
+@click.option('--model', default=None, help='Override producer model (default: from telos.yaml).')
 def start(model, loops, name):
     """Run autonomous loops."""
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+
+    # Warn if projects/ exists but TELOS_HOME is not explicitly set
+    if not os.getenv("TELOS_HOME") and (PROJECT_ROOT / "projects").exists():
+        click.echo(
+            "⚠️  Warning: 'projects/' directory found but TELOS_HOME is not set.\n"
+            "   Add TELOS_HOME=projects/<name> to .env.local to use an existing project.\n"
+            "   Data will be written to: " + str(TELOS_HOME),
+            err=True,
+        )
+
     _preflight_check()
     from .telos_core import AgentLoop
     from .config import PID_FILE
