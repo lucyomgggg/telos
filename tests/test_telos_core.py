@@ -41,8 +41,7 @@ def test_agent_loop_safety_check_daily_limit():
          patch("src.telos.telos_core.SandboxManager"), \
          patch("src.telos.telos_core.ToolRegistry"), \
          patch("src.telos.telos_core.GoalGenerator"), \
-         patch("src.telos.telos_core.ProducerAgent"), \
-         patch("src.telos.telos_core.CriticAgent"):
+         patch("src.telos.telos_core.ProducerAgent"):
         mock_settings_global.load.return_value = mock_settings
         loop = AgentLoop()
 
@@ -64,8 +63,7 @@ def test_agent_loop_safety_check_monthly_cost():
          patch("src.telos.telos_core.SandboxManager"), \
          patch("src.telos.telos_core.ToolRegistry"), \
          patch("src.telos.telos_core.GoalGenerator"), \
-         patch("src.telos.telos_core.ProducerAgent"), \
-         patch("src.telos.telos_core.CriticAgent"):
+         patch("src.telos.telos_core.ProducerAgent"):
         mock_settings_global.load.return_value = mock_settings
         loop = AgentLoop()
 
@@ -88,7 +86,6 @@ def test_shutdown_preserves_workspace():
          patch("src.telos.telos_core.ToolRegistry"), \
          patch("src.telos.telos_core.GoalGenerator"), \
          patch("src.telos.telos_core.ProducerAgent"), \
-         patch("src.telos.telos_core.CriticAgent"), \
          patch("src.telos.telos_core.JournalWriter"):
         mock_settings_global.load.return_value = mock_settings
 

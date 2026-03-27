@@ -13,7 +13,7 @@ Traditional agents follow a linear script provided by a human. **Telos** flips t
 - **Telos**: Continuously generates its own sub-goals, executes them in a hardened sandbox, and evaluates the results against a formal rubric.
 
 ### Core Philosophy
-- **Zero-Knowledge Criticism**: The evaluator (Critic) is isolated from the executor's (Producer) internal "Chain of Thought" to prevent judge bias.
+- **Instinct-Driven Goal Generation**: The AI's goals are generated based on environmental signals (curiosity, preservation, growth, order) computed from past loops, not human-provided prompts.
 - **Semantic Continuity**: Every action is embedded into a vector store, allowing the system to recognize patterns and avoid repeating past failures.
 - **Isolated Execution**: Every line of code is executed in a restricted Docker sandbox for safety.
 
@@ -22,9 +22,9 @@ Traditional agents follow a linear script provided by a human. **Telos** flips t
 ## Architecture
 
 Telos operates on a continuous feedback loop:
-1. **Goal Generation**: Analyzes history and context to propose a novel next step.
-2. **Multi-Step Execution**: The Producer interacts with the sandbox via tool-calling.
-3. **Strict Evaluation**: The Critic judge scores the result based on a weighted rubric.
+1. **Goal Generation**: Driven by instinct signals (curiosity, preservation, growth, order) computed from environmental feedback.
+2. **Multi-Step Execution**: The Producer interacts with the sandbox via tool-calling, building upon previous work.
+3. **Instinct Update**: Environmental signals (output complexity, crash rate, semantic novelty, etc.) are computed to update internal drives.
 4. **Audit & Memory**: Results are stored in SQLite and Qdrant for long-term learning.
 
 ---
@@ -211,5 +211,4 @@ Environment variables  >  telos.yaml  >  config.yaml  >  Pydantic defaults
 `telos init` generates `telos.yaml` with sensible defaults. Edit it to change models or intent.
 
 Other files:
-- **`rubric.json`**: Scoring criteria used by the Critic.
-- **`templates/`**: System prompts that define the Producer and Critic personalities.
+- **`templates/`**: System prompts that define the Producer and GoalGenerator personalities.

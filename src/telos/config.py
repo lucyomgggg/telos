@@ -169,7 +169,6 @@ HF_TOKEN=
 
 # --- Overrides ---
 # TELOS_PRODUCER_MODEL=openrouter/anthropic/claude-sonnet-4-6
-# TELOS_CRITIC_MODEL=openrouter/deepseek/deepseek-chat-v3-0324
 # TELOS_EMBEDDING_MODEL=all-MiniLM-L6-v2
 # TELOS_USE_DOCKER=true
 

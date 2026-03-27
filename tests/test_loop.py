@@ -13,8 +13,7 @@ class TestAgentLoopExecution:
              patch("src.telos.telos_core.SandboxManager"), \
              patch("src.telos.telos_core.ToolRegistry"), \
              patch("src.telos.telos_core.GoalGenerator"), \
-             patch("src.telos.telos_core.ProducerAgent"), \
-             patch("src.telos.telos_core.CriticAgent"):
+             patch("src.telos.telos_core.ProducerAgent"):
 
             loop = AgentLoop()
             mock_sqlite = loop.sqlite
@@ -26,7 +25,7 @@ class TestAgentLoopExecution:
             loop.producer.execute_goal.side_effect = RuntimeError("producer boom")
 
             with pytest.raises(RuntimeError, match="producer boom"):
-                loop.run_iteration("test intent")
+                loop.run_iteration()
 
             # LoopRecord should have been updated to "failed"
             save_calls = mock_sqlite.save_loop.call_args_list
@@ -36,22 +35,21 @@ class TestAgentLoopExecution:
             )
             assert failed_call is not None, "Expected save_loop to be called with status='failed'"
 
-    def test_run_iteration_shutdown_clears_workspace(self, tmp_path):
-        """shutdown() should remove the persistent workspace."""
+    def test_run_iteration_shutdown_preserves_workspace(self, tmp_path):
+        """shutdown() should NOT delete the persistent workspace."""
         with patch("src.telos.telos_core.MemoryStore"), \
              patch("src.telos.telos_core.VectorStore"), \
              patch("src.telos.telos_core.SandboxManager"), \
              patch("src.telos.telos_core.ToolRegistry"), \
              patch("src.telos.telos_core.GoalGenerator"), \
-             patch("src.telos.telos_core.ProducerAgent"), \
-             patch("src.telos.telos_core.CriticAgent"):
+             patch("src.telos.telos_core.ProducerAgent"):
 
             loop = AgentLoop()
-            # Point workspace to tmp_path so we can verify deletion
+            # Point workspace to tmp_path so we can verify preservation
             loop.sandbox.local_workspace = tmp_path / "persistent"
             loop.sandbox.local_workspace.mkdir()
             (loop.sandbox.local_workspace / "artifact.txt").write_text("hello")
 
             loop.shutdown()
 
-            assert not loop.sandbox.local_workspace.exists()
+            assert loop.sandbox.local_workspace.exists(), "shutdown() must preserve the workspace"

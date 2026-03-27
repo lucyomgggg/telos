@@ -250,7 +250,6 @@ class Orchestrator:
             id=self.session_id,
             name=session_name or f"session-{session_ts}",
             producer_model=cfg.llm.producer_model,
-            critic_model=None,
             goal_gen_model=cfg.llm.goal_gen_model,
             intended_loops=intended_loops,
             status="running",

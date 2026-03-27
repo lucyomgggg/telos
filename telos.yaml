@@ -7,7 +7,6 @@ initial_intent: "SURVIVE"
 llm:
   producer_model: openrouter/deepseek/deepseek-chat-v3-0324
   goal_gen_model: openrouter/deepseek/deepseek-chat-v3-0324
-  critic_model: openrouter/deepseek/deepseek-chat-v3-0324
   max_tokens_per_loop: 150000
 
 memory:
@@ -16,12 +15,8 @@ memory:
   embedding_dimensions: 384
   persistent_workspace_name: persistent
 
-critic:
-  rubric_path: rubric.json
-
 history_limit: 10
 similar_artifacts_limit: 2
-failure_threshold: 0.3
 max_lessons: 2
 rate_limit_delay: 0.5
 deduplication_threshold: 0.85
