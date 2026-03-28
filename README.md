@@ -67,57 +67,30 @@ sudo apt update && sudo apt install -y python3.11 python3.11-venv
 
 ## Getting Started
 
-### 1. Clone & install
 ```bash
 git clone <repository-url>
 cd telos
-
-# (Recommended) create a virtual environment
-python3.11 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-
-# Install dependencies
 pip install -e .
-```
-
-### 2. Run the setup wizard
-```bash
 telos init
 ```
 
-The wizard will guide you through:
-1. **API key** — enter your OpenRouter key and it's validated and saved to `.env` automatically
-2. **Initial intent** — set what the AI should work on (e.g. `"Build useful tools and explore the system."`)
-3. **Docker** — Qdrant is started automatically if Docker is available; if not, Telos falls back to local sandbox mode
-4. **Embedding model** — `all-MiniLM-L6-v2` is downloaded on first run (~90 MB)
+`telos init` が対話形式でセットアップをガイドします（全ステップ Enter でスキップ可）:
 
-```
-$ telos init
+| Step | 内容 |
+|:---|:---|
+| **[1/5] Model** | 使用モデルを選択（プリセット一覧 or カスタム入力） |
+| **[2/5] API Key** | 選択モデルのプロバイダーキーを設定・検証 |
+| **[3/5] Intent** | AI に何をさせるかを設定 |
+| **[4/5] Docker** | サンドボックスイメージをビルドし Qdrant を起動（Docker なしの場合はローカルモードで続行） |
+| **[5/5] Embedding** | `all-MiniLM-L6-v2` をダウンロード（初回のみ ~90MB） |
 
-Welcome to Telos — Autonomous AI Runtime
-
-? OpenRouter API key: sk-or-...
-  Verifying... ✅
-
-? What should the AI work on?
-  > Build useful tools and explore the system.
-
-Creating project structure... done ✅
-
-Checking Docker... found ✅
-Running: docker compose up -d (Qdrant)... done ✅
-
-Downloading embedding model (first time only, ~90MB)...
-Embedding model... done ✅
-
-════════════════════════════════
-  Telos is ready.
-  Run: telos start --loops 10
-════════════════════════════════
+```bash
+telos start --loops 10
 ```
 
-> **OpenRouter is recommended** — one key gives access to all models (DeepSeek, Claude, Gemini, etc.).
-> Get yours at https://openrouter.ai/keys
+> **設定の変更:** `telos.yaml`（モデル・intent・メモリ設定）と `config.yaml`（Docker・Qdrant・コスト上限）を直接編集することで、`telos init` を再実行せずに設定を変更できます。API キーは `.env` に記載されています。
+
+> **ウィザードの再実行:** `telos init`（既存の設定が現在値としてデフォルト表示されます）
 
 ---
 
@@ -126,26 +99,8 @@ Embedding model... done ✅
 ### Typical workflow
 
 ```bash
-# 1. Run loops
+# Run loops
 telos start --loops 5 --name "my-experiment"
-
-# 2. Check what happened
-telos status              # session list
-telos status --loops      # individual loop list
-
-# 3. Inspect a specific loop
-telos show                        # latest loop
-telos show <loop_id>              # specific loop (8-char ID ok)
-telos show <loop_id> --explain    # narrative explanation
-
-# 4. Export results
-telos export                          # latest session → JSON
-telos export <session_id>             # specific session
-telos export --format csv -o out.csv  # CSV to custom path
-
-# 5. Generate a full report
-telos report                  # saves to report_<project>_<timestamp>.md
-telos report -o summary.md    # custom path
 ```
 
 ### Starting over (reset)
@@ -162,14 +117,13 @@ telos reset --yes  # same, no confirmation prompt
 Each project has its own database, workspace, and logs under `projects/<name>/`.
 
 ```bash
-telos project current              # show the active project and its stats
 telos project list                 # list all projects (★ marks the active one)
 telos project new experiment-v2   # create a new project and switch to it
 telos project switch main          # switch to an existing project
 telos project delete old-run       # permanently delete a project and its data
 ```
 
-The active project is stored in `.env.local` as `TELOS_HOME`. Every command operates on the active project — `telos status` and `telos project current` both show which project is active.
+The active project is stored in `.env.local` as `TELOS_HOME`. Every command operates on the active project — `telos project list` shows which project is active (★ marks the active one).
 
 ### All commands
 
@@ -178,9 +132,8 @@ The active project is stored in `.env.local` as `TELOS_HOME`. Every command oper
 | `telos init [--force] [--non-interactive]` | Generate `telos.yaml` with project settings. `--force` overwrites; `--non-interactive` skips prompts (CI mode). |
 | `telos start` | Run autonomous loops. Options: `--loops N`, `--name`, `--model`. Runs a pre-flight API key check before starting. |
 | `telos stop` | Stop a running loop gracefully. |
-| `telos reset` | Wipe the active project's DB + workspace + log to restart from loop 1. Add `--yes` to skip confirmation. |
-| `telos project current` | Show the active project name and stats. |
-| `telos project list` | List all projects (★ = active) with loop counts and scores. |
+| `telos reset` | Wipe the active project's DB + workspace + log + journal to restart from loop 1. Add `--yes` to skip confirmation. |
+| `telos project list` | List all projects (★ = active) with loop counts. |
 | `telos project new NAME` | Create a new isolated project and switch to it. |
 | `telos project switch NAME` | Switch the active project. |
 | `telos project delete NAME` | Permanently delete a project and all its data. |
