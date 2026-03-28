@@ -1,6 +1,7 @@
 import os
 import sys
 import signal
+import subprocess
 import warnings
 import logging
 
@@ -27,7 +28,7 @@ from .config import (
     PID_FILE, LOG_FILE, TELOS_HOME, PROJECT_CONFIG, settings,
 )
 
-# Ensure directories and default config exist on import or explicitly via init
+# Ensure directories and default config exist on import
 init_directories()
 
 @click.group()
@@ -37,200 +38,18 @@ def cli():
     Typical workflow:
 
     \b
-      telos project list                 # check active project
-      telos start --loops 5 --name my-run   # run 5 loops
-      telos reset                            # wipe and start over
+      # Edit telos.yaml (model, intent) and .env (API key)
+      telos run --loops 5            # run 5 loops
+      telos project list             # check active project
+      telos reset                    # wipe and start over
     """
     pass
-
-_PRESET_MODELS = [
-    ("openrouter/deepseek/deepseek-chat-v3-0324", "recommended, low cost"),
-    ("openrouter/anthropic/claude-sonnet-4-6",    ""),
-    ("openrouter/google/gemini-flash-1.5",         ""),
-    ("gemini/gemini-flash-latest",                 "free tier available"),
-    ("openai/gpt-4o",                              ""),
-]
 
 
 def _key_for(model: str) -> str:
     """Derive the API key env var name from a model string."""
     return f"{model.split('/')[0].upper()}_API_KEY"
 
-
-def _provider_display(model: str) -> str:
-    """Human-readable provider name from model string."""
-    prefix = model.split("/")[0]
-    return {"openrouter": "OpenRouter", "gemini": "Google Gemini",
-            "openai": "OpenAI", "anthropic": "Anthropic",
-            "deepseek": "DeepSeek"}.get(prefix, prefix.capitalize())
-
-
-def _wizard_model(current: str) -> "str | None":
-    """Show model picker. Returns selected model string or None to keep current."""
-    click.echo(click.style("\n[1/5] Model", bold=True))
-    for i, (m, note) in enumerate(_PRESET_MODELS, 1):
-        tag = click.style(f"  ({note})", dim=True) if note else ""
-        current_tag = click.style("  ← current", fg="cyan") if m == current else ""
-        click.echo(f"  {i}. {m}{tag}{current_tag}")
-    click.echo(f"  {len(_PRESET_MODELS) + 1}. Enter custom model ID")
-    click.echo(click.style(f"  Press Enter to keep current: {current}", dim=True))
-
-    raw = click.prompt("  >", default="", show_default=False).strip()
-    if not raw:
-        return None  # keep current
-    if raw.isdigit():
-        idx = int(raw) - 1
-        if idx < len(_PRESET_MODELS):
-            selected = _PRESET_MODELS[idx][0]
-            click.echo(f"  Selected: {selected}")
-            return selected
-        # custom
-        custom = click.prompt("  Custom model ID").strip()
-        return custom or None
-    # user typed a model ID directly
-    return raw
-
-
-def _wizard_api_key(model: str) -> None:
-    """Prompt for the API key corresponding to the given model's provider."""
-    from dotenv import set_key
-    load_dotenv()
-
-    key_name = _key_for(model)
-    provider = _provider_display(model)
-    existing = os.getenv(key_name, "")
-
-    click.echo(click.style("\n[2/5] API Key", bold=True))
-    click.echo(f"  Provider detected: {provider}  ({key_name})")
-
-    if existing:
-        click.echo(click.style(f"  Already set (...{existing[-6:]}) ✅  Press Enter to keep.", dim=True))
-
-    for attempt in range(3):
-        prompt_text = f"  ? {provider} API key"
-        key = click.prompt(prompt_text, default=existing or "", hide_input=True, show_default=False)
-        if not key:
-            click.echo("  Skipped.")
-            return
-
-        click.echo("  Verifying...", nl=False)
-        try:
-            import litellm
-            litellm.completion(
-                model=model,
-                messages=[{"role": "user", "content": "hi"}],
-                max_tokens=1,
-                api_key=key,
-            )
-            env_path = Path(".env")
-            if not env_path.exists():
-                env_path.touch()
-            set_key(str(env_path), key_name, key)
-            os.environ[key_name] = key
-            click.echo(" ✅")
-            return
-        except Exception:
-            click.echo(" ❌  (Authentication failed. Check your key.)")
-            if attempt < 2:
-                click.echo(f"  Retrying ({attempt + 2}/3)...")
-
-    click.echo(f"  Add {key_name}=<key> to .env and re-run: telos init")
-
-
-def _wizard_docker() -> None:
-    import subprocess
-    click.echo(click.style("\n[4/5] Docker & Sandbox", bold=True))
-    click.echo("  Checking Docker...", nl=False)
-    try:
-        result = subprocess.run(["docker", "info"], capture_output=True, timeout=10)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        result = None
-
-    if result is None or result.returncode != 0:
-        click.echo(
-            "\n  ⚠️  Docker not found — running in local sandbox mode (no isolation).\n"
-            "     Install Docker for a safer execution environment."
-        )
-        return
-
-    click.echo(" found ✅")
-
-    # Build sandbox image if not already present
-    from .config import reload_settings
-    image_name = reload_settings().sandbox.image
-    inspect = subprocess.run(["docker", "image", "inspect", image_name], capture_output=True)
-    if inspect.returncode == 0:
-        click.echo(f"  Sandbox image {image_name} already built ✅")
-    else:
-        click.echo(f"  Building {image_name} (first time ~2 min)...", nl=False)
-        build = subprocess.run(
-            ["docker", "build", "-t", image_name, str(Path.cwd())],
-            capture_output=True,
-        )
-        if build.returncode == 0:
-            click.echo(" done ✅")
-        else:
-            click.echo(" ⚠️  Build failed. Check Dockerfile.")
-            click.echo(build.stderr.decode(errors="replace")[:400])
-
-    # Start Qdrant
-    click.echo("  Starting Qdrant...", nl=False)
-    r = subprocess.run(["docker", "compose", "up", "-d"], capture_output=True)
-    click.echo(" done ✅" if r.returncode == 0 else " ⚠️  (failed, continuing)")
-
-
-def _wizard_embedding_model() -> None:
-    click.echo(click.style("\n[5/5] Embedding model", bold=True))
-    click.echo("  Downloading all-MiniLM-L6-v2 (~90MB, first time only)...", nl=False)
-    try:
-        from sentence_transformers import SentenceTransformer
-        SentenceTransformer("all-MiniLM-L6-v2")
-        click.echo(" done ✅")
-    except Exception as e:
-        click.echo(f" ⚠️  Failed: {e}")
-
-
-@cli.command()
-@click.option('--force', is_flag=True, help='Overwrite existing telos.yaml.')
-@click.option('--non-interactive', 'non_interactive', is_flag=True, help='Skip all prompts (CI mode).')
-def init(force, non_interactive):
-    """Setup wizard: model, API key, Docker sandbox, embedding model."""
-    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "0"
-    click.echo("\nWelcome to Telos — Autonomous AI Runtime\n")
-
-    init_directories(force=force)
-    from .config import reload_settings
-    s = reload_settings()
-
-    if not non_interactive:
-        # [1/5] Model
-        new_model = _wizard_model(s.llm.producer_model)
-        if new_model:
-            s.llm.producer_model = new_model
-            s.llm.goal_gen_model = new_model
-
-        # [2/5] API key (dynamic based on selected model)
-        _wizard_api_key(s.llm.producer_model)
-
-        # [3/5] Intent
-        click.echo(click.style("\n[3/5] What should the AI work on?", bold=True))
-        intent = click.prompt("  >", default=s.initial_intent, show_default=True)
-        s.initial_intent = intent
-
-    s.save()
-    reload_settings()
-
-    TELOS_HOME.mkdir(parents=True, exist_ok=True)
-    (TELOS_HOME / "workspace" / "persistent").mkdir(parents=True, exist_ok=True)
-
-    if not non_interactive:
-        _wizard_docker()        # [4/5]
-        _wizard_embedding_model()  # [5/5]
-
-    click.echo("\n" + "═" * 36)
-    click.echo("  Telos is ready.")
-    click.echo("  Run: telos start --loops 10")
-    click.echo("═" * 36 + "\n")
 
 def _format_api_error(e: Exception) -> str:
     """Convert raw LLM/API exceptions to a human-readable message."""
@@ -270,28 +89,93 @@ def _preflight_check():
         s = reload_settings()
         models = [m for m in [s.llm.producer_model, s.llm.goal_gen_model] if m is not None]
     except Exception:
-        click.echo("❌  telos.yaml not found or invalid. Run: telos init")
+        click.echo("❌  telos.yaml not found or invalid.")
         sys.exit(1)
 
     missing = [(_key_for(m), m) for m in set(models) if not os.getenv(_key_for(m))]
     if missing:
         for key_name, model in missing:
             click.echo(f"❌  {key_name} is not set (needed for {model})")
-        click.echo("   Add it to .env and re-run: telos init")
+        click.echo("   Add it to .env and re-run.")
         sys.exit(1)
+
+
+def _ensure_env() -> None:
+    """Auto-copy .env.example → .env if .env doesn't exist, then exit with instructions."""
+    env_path = Path(".env")
+    if env_path.exists():
+        return
+    import shutil
+    example_path = Path(".env.example")
+    if example_path.exists():
+        shutil.copy(example_path, env_path)
+        click.echo("✓ Created .env from .env.example — fill in your API key and re-run.")
+    else:
+        click.echo("❌  .env not found. Create it with your API key (e.g. OPENROUTER_API_KEY=...).")
+    sys.exit(0)
+
+
+def _docker_available() -> bool:
+    """Return True if Docker daemon is reachable."""
+    try:
+        r = subprocess.run(["docker", "info"], capture_output=True, timeout=10)
+        return r.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def _docker_start() -> None:
+    """Start Qdrant and build the sandbox image if needed. No-op if Docker is unavailable."""
+    if not _docker_available():
+        click.echo("⚠️  Docker not found — running in local sandbox mode (no isolation).")
+        return
+
+    from .config import reload_settings
+    image_name = reload_settings().sandbox.image
+
+    # Build sandbox image if not already present
+    inspect = subprocess.run(["docker", "image", "inspect", image_name], capture_output=True)
+    if inspect.returncode != 0:
+        click.echo(f"Building sandbox image {image_name} (first time ~2 min)...", nl=False)
+        build = subprocess.run(
+            ["docker", "build", "-t", image_name, str(Path.cwd())],
+            capture_output=True,
+        )
+        if build.returncode == 0:
+            click.echo(" done ✓")
+        else:
+            click.echo(" ⚠️  Build failed. Check Dockerfile.")
+            click.echo(build.stderr.decode(errors="replace")[:400])
+
+    # Start Qdrant
+    click.echo("Starting Qdrant...", nl=False)
+    r = subprocess.run(["docker", "compose", "up", "-d"], capture_output=True)
+    click.echo(" done ✓" if r.returncode == 0 else " ⚠️  (failed, vector memory disabled)")
+
+
+
+def _ensure_embedding() -> None:
+    """Download the embedding model if not already cached (no-op after first run)."""
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    try:
+        from sentence_transformers import SentenceTransformer
+        SentenceTransformer("all-MiniLM-L6-v2")
+    except Exception as e:
+        click.echo(f"⚠️  Embedding model unavailable: {e}")
 
 
 @cli.command()
 @click.option('--loops', '-n', default=1, type=int, help='Number of loops to run.  [default: 1]')
 @click.option('--name', default=None, help='Session name (auto-generated if omitted).')
 @click.option('--model', default=None, help='Override producer model (default: from telos.yaml).')
-def start(model, loops, name):
+def run(model, loops, name):
     """Run autonomous loops."""
-    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-
+    _ensure_env()
     _preflight_check()
+    _docker_start()
+    _ensure_embedding()
+
     from .telos_core import AgentLoop
-    from .config import PID_FILE
 
     selected_model = model or settings.llm.producer_model
 
@@ -331,6 +215,7 @@ def start(model, loops, name):
         click.echo(f"\nDone: {completed}/{loops} loops  total cost: ${session_cost:.4f}")
         agent.shutdown()
         PID_FILE.unlink(missing_ok=True)
+
 
 @cli.command()
 def stop():
@@ -395,7 +280,7 @@ def reset(yes):
         journal_file.unlink()
         click.echo("Journal cleared.")
 
-    click.echo(click.style("\nReset complete. Run 'telos start' to begin fresh.", fg='green', bold=True))
+    click.echo(click.style("\nReset complete. Run 'telos run' to begin fresh.", fg='green', bold=True))
 
 
 # ---------------------------------------------------------------------------

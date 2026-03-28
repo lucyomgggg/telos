@@ -6,11 +6,11 @@
 
 ## Overview
 
-Telos is an autonomous agent runtime designed to bridge the gap between "tool-using agents" and "self-evolving systems." 
+Telos is an autonomous agent runtime designed to bridge the gap between "tool-using agents" and "self-evolving systems."
 
 Traditional agents follow a linear script provided by a human. **Telos** flips this:
 - **Human**: Sets the initial "Ambient Intent" and high-level safety constraints.
-- **Telos**: Continuously generates its own sub-goals, executes them in a hardened sandbox, and evaluates the results against a formal rubric.
+- **Telos**: Continuously generates its own sub-goals, executes them in a hardened sandbox, and evaluates results via environmental instinct signals — no human scoring required.
 
 ### Core Philosophy
 - **Instinct-Driven Goal Generation**: The AI's goals are generated based on environmental signals (curiosity, preservation, growth, order) computed from past loops, not human-provided prompts.
@@ -49,7 +49,7 @@ Telos operates on a continuous feedback loop:
 brew install python@3.11
 brew install --cask docker   # Contains Docker Compose
 
-# Step 3: Start Docker Desktop（Open mannualy at first time.）
+# Step 3: Start Docker Desktop（Open manually at first time.）
 open -a Docker
 ```
 
@@ -71,26 +71,34 @@ sudo apt update && sudo apt install -y python3.11 python3.11-venv
 git clone <repository-url>
 cd telos
 pip install -e .
-telos init
 ```
 
-`telos init` が対話形式でセットアップをガイドします（全ステップ Enter でスキップ可）:
+Then edit the two config files:
 
-| Step | 内容 |
-|:---|:---|
-| **[1/5] Model** | 使用モデルを選択（プリセット一覧 or カスタム入力） |
-| **[2/5] API Key** | 選択モデルのプロバイダーキーを設定・検証 |
-| **[3/5] Intent** | AI に何をさせるかを設定 |
-| **[4/5] Docker** | サンドボックスイメージをビルドし Qdrant を起動（Docker なしの場合はローカルモードで続行） |
-| **[5/5] Embedding** | `all-MiniLM-L6-v2` をダウンロード（初回のみ ~90MB） |
+**`telos.yaml`** — set your intent and model:
+```yaml
+initial_intent: "Build a web scraper that collects and summarizes news articles."
+llm:
+  producer_model: openrouter/deepseek/deepseek-chat-v3-0324
+```
 
+**`.env`** — set your API key (auto-created from `.env.example` on first run):
+```
+OPENROUTER_API_KEY=your-key-here
+```
+
+Then run:
 ```bash
-telos start --loops 10
+telos run --loops 10
 ```
 
-> **設定の変更:** `telos.yaml`（モデル・intent・メモリ設定）と `config.yaml`（Docker・Qdrant・コスト上限）を直接編集することで、`telos init` を再実行せずに設定を変更できます。API キーは `.env` に記載されています。
+`telos run` handles everything automatically:
+- Starts Qdrant (vector memory) via Docker if not already running
+- Builds the sandbox image on first run (~2 min)
+- Downloads the embedding model on first run (~90MB)
+- Runs the autonomous loop
 
-> **ウィザードの再実行:** `telos init`（既存の設定が現在値としてデフォルト表示されます）
+> **Changing settings:** Edit `telos.yaml` (model, intent, memory parameters) and `config.yaml` (Docker, Qdrant, cost limits) directly. API keys go in `.env`.
 
 ---
 
@@ -100,7 +108,7 @@ telos start --loops 10
 
 ```bash
 # Run loops
-telos start --loops 5 --name "my-experiment"
+telos run --loops 5 --name "my-experiment"
 ```
 
 ### Starting over (reset)
@@ -129,8 +137,7 @@ The active project is stored in `.env.local` as `TELOS_HOME`. Every command oper
 
 | Command | Description |
 |:---|:---|
-| `telos init [--force] [--non-interactive]` | Generate `telos.yaml` with project settings. `--force` overwrites; `--non-interactive` skips prompts (CI mode). |
-| `telos start` | Run autonomous loops. Options: `--loops N`, `--name`, `--model`. Runs a pre-flight API key check before starting. |
+| `telos run` | Run autonomous loops. Options: `--loops N`, `--name`, `--model`. Starts Docker if not already running, then runs a pre-flight API key check. |
 | `telos stop` | Stop a running loop gracefully. |
 | `telos reset` | Wipe the active project's DB + workspace + log + journal to restart from loop 1. Add `--yes` to skip confirmation. |
 | `telos project list` | List all projects (★ = active) with loop counts. |
@@ -155,7 +162,6 @@ Settings are merged in this priority order (highest wins):
 Environment variables  >  telos.yaml  >  config.yaml  >  Pydantic defaults
 ```
 
-`telos init` generates `telos.yaml` with sensible defaults. Edit it to change models or intent.
-
 Other files:
+- **`.env`**: API keys (not tracked by git). Auto-created from `.env.example` on first `telos run`.
 - **`templates/`**: System prompts that define the Producer and GoalGenerator personalities.

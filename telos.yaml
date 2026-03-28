@@ -1,14 +1,14 @@
 llm:
   model: gemini/gemini-flash-latest
-  producer_model: openrouter/deepseek/deepseek-chat-v3-0324
-  goal_gen_model: openrouter/deepseek/deepseek-chat-v3-0324
+  producer_model: deepseek/deepseek-chat
+  goal_gen_model: deepseek/deepseek-chat
   max_tokens_per_loop: 500000
 memory:
   qdrant_url: http://localhost:6333
   collection_name: telos_artifacts
   embedding_model: all-MiniLM-L6-v2
   embedding_dimensions: 384
-  workspace_path: /Users/tomcruise/telos/data/workspace
+  workspace_path: /Users/tomcruise/telos/projects/default/workspace
   persistent_workspace_name: persistent
 sandbox:
   image: telos-sandbox:latest
@@ -18,12 +18,7 @@ sandbox:
   timeout: 60
 logging:
   level: INFO
-initial_intent:
-  Build a command-line data analysis toolkit in Python.
-  Start with core utilities (file parsing, statistics, data cleaning).
-  Grow it into a comprehensive tool with visualization, reporting,
-  and extensible plugin architecture. Each iteration should add
-  meaningful functionality that builds on previous work.
+initial_intent: "Describe what you want the AI to build or explore."
 history_limit: 10
 similar_artifacts_limit: 2
 max_lessons: 2
