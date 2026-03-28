@@ -8,6 +8,7 @@ import logging
 os.environ.setdefault("LITELLM_LOG", "ERROR")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("HF_HUB_VERBOSITY", "error")
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 
 warnings.filterwarnings("ignore", module="litellm")
 logging.getLogger("litellm").setLevel(logging.CRITICAL)
