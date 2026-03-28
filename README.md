@@ -178,12 +178,6 @@ The active project is stored in `.env.local` as `TELOS_HOME`. Every command oper
 | `telos init [--force] [--non-interactive]` | Generate `telos.yaml` with project settings. `--force` overwrites; `--non-interactive` skips prompts (CI mode). |
 | `telos start` | Run autonomous loops. Options: `--loops N`, `--name`, `--model`. Runs a pre-flight API key check before starting. |
 | `telos stop` | Stop a running loop gracefully. |
-| `telos status` | Show session history. Add `--loops` for individual loop view. |
-| `telos show [LOOP_ID]` | Inspect a loop result. Add `--explain` for LLM narrative. |
-| `telos export [SESSION_ID]` | Export session data to JSON or CSV (`--format csv`, `-o FILE`). |
-| `telos report` | Generate a full Markdown report (`-o FILE`). |
-| `telos logs` | View agent logs. Add `-f` to stream in real time. |
-| `telos dashboard` | Open the interactive TUI dashboard. |
 | `telos reset` | Wipe the active project's DB + workspace + log to restart from loop 1. Add `--yes` to skip confirmation. |
 | `telos project current` | Show the active project name and stats. |
 | `telos project list` | List all projects (★ = active) with loop counts and scores. |

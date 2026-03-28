@@ -1,6 +1,6 @@
 llm:
   model: gemini/gemini-flash-latest
-  producer_model: openrouter/anthropic/claude-sonnet-4-6
+  producer_model: openrouter/deepseek/deepseek-chat-v3-0324
   goal_gen_model: openrouter/deepseek/deepseek-chat-v3-0324
   max_tokens_per_loop: 500000
 memory:

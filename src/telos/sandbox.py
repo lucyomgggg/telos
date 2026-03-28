@@ -26,18 +26,33 @@ class SandboxStrategy(ABC):
     def list_files(self, path: str = "") -> list: pass
 
 class DockerSandboxStrategy(SandboxStrategy):
-    def __init__(self, client, image_name, container_name, mem_limit):
+    def __init__(self, client, image_name, container_name, mem_limit, workspace_dir: str = None):
         self.client = client
         self.image_name = image_name
         self.container_name = container_name
         self.mem_limit = mem_limit
+        self.workspace_dir = workspace_dir
         self.container = None
 
     def start(self):
+        volumes = {}
+        if self.workspace_dir:
+            Path(self.workspace_dir).mkdir(parents=True, exist_ok=True)
+            volumes = {self.workspace_dir: {"bind": "/workspace", "mode": "rw"}}
+
         try:
-            self.container = self.client.containers.get(self.container_name)
-            if self.container.status != "running":
-                self.container.start()
+            existing = self.client.containers.get(self.container_name)
+            # Recreate if volume config changed or container is stopped
+            mounts = {m["Destination"]: m for m in existing.attrs.get("Mounts", [])}
+            needs_recreate = bool(volumes) and "/workspace" not in mounts
+            if needs_recreate or existing.status != "running":
+                try:
+                    existing.stop(timeout=2)
+                except Exception:
+                    pass
+                existing.remove()
+                raise docker.errors.NotFound("recreating")
+            self.container = existing
         except docker.errors.NotFound:
             self.container = self.client.containers.run(
                 self.image_name,
@@ -46,6 +61,7 @@ class DockerSandboxStrategy(SandboxStrategy):
                 network_mode="bridge",
                 mem_limit=self.mem_limit,
                 memswap_limit=self.mem_limit,
+                volumes=volumes or None,
             )
         return self.container
 
@@ -192,7 +208,11 @@ class SandboxManager:
             try:
                 self.client = docker.from_env()
                 self.client.ping()
-                self.strategy = DockerSandboxStrategy(self.client, self.image_name, self.container_name, self.settings.sandbox.memory_limit)
+                self.strategy = DockerSandboxStrategy(
+                    self.client, self.image_name, self.container_name,
+                    self.settings.sandbox.memory_limit,
+                    workspace_dir=str(self.local_workspace),
+                )
                 log.info("Docker sandbox strategy initialized.")
             except Exception: self.use_docker = False
 
