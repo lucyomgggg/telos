@@ -36,3 +36,6 @@ report_*.md
 .pytest_cache/
 
 # config.yaml (infra) and telos.yaml (project settings) are both git-tracked
+
+
+.claude/

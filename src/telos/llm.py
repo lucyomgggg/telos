@@ -21,9 +21,10 @@ from .utils import repair_json
 
 log = get_logger("llm")
 
-# Disable litellm telemetry and ensure compatibility
+# Disable litellm telemetry, debug output, and ensure compatibility
 litellm.telemetry = False
 litellm.drop_params = True
+litellm.suppress_debug_info = True
 
 # Apply user-defined cost overrides for models not in litellm's database
 def _apply_cost_overrides():
@@ -129,14 +130,20 @@ class LLMService:
                 msg = response.choices[0].message
                 raw_args = None
 
-                if msg.tool_calls:
+                if getattr(msg, 'tool_calls', None):
                     raw_args = msg.tool_calls[0].function.arguments
                 elif msg.content:
-                    # Fallback: extract JSON from content
-                    match = re.search(r'\{.*\}', msg.content, re.DOTALL)
-                    if match:
-                        raw_args = match.group()
-                
+                    content = msg.content
+                    # Strip markdown code fences if present
+                    fence_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
+                    if fence_match:
+                        raw_args = fence_match.group(1)
+                    else:
+                        # Fallback: extract outermost JSON object
+                        match = re.search(r'\{.*\}', content, re.DOTALL)
+                        if match:
+                            raw_args = match.group()
+
                 if not raw_args:
                     raise ValueError("No structured data found in LLM response")
 

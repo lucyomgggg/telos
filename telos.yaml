@@ -1,27 +1,43 @@
-# telos.yaml — project settings
-# Model selection, initial intent, memory parameters, etc. User-editable.
-# Infrastructure settings (Qdrant, Docker) are referenced in config.yaml.
-
-initial_intent: "SURVIVE"
-
 llm:
-  producer_model: openrouter/deepseek/deepseek-chat-v3-0324
+  model: gemini/gemini-flash-latest
+  producer_model: openrouter/anthropic/claude-sonnet-4-6
   goal_gen_model: openrouter/deepseek/deepseek-chat-v3-0324
-  max_tokens_per_loop: 150000
-
+  max_tokens_per_loop: 500000
 memory:
+  qdrant_url: http://localhost:6333
   collection_name: telos_artifacts
   embedding_model: all-MiniLM-L6-v2
   embedding_dimensions: 384
+  workspace_path: /Users/tomcruise/telos/data/workspace
   persistent_workspace_name: persistent
-
+sandbox:
+  image: telos-sandbox:latest
+  container_name: telos-agent-sandbox
+  use_docker: true
+  memory_limit: 1024m
+  timeout: 60
+logging:
+  level: INFO
+initial_intent:
+  Build a command-line data analysis toolkit in Python.
+  Start with core utilities (file parsing, statistics, data cleaning).
+  Grow it into a comprehensive tool with visualization, reporting,
+  and extensible plugin architecture. Each iteration should add
+  meaningful functionality that builds on previous work.
 history_limit: 10
 similar_artifacts_limit: 2
 max_lessons: 2
+daily_loop_limit: 1000
+monthly_cost_limit: 20.0
 rate_limit_delay: 0.5
 deduplication_threshold: 0.85
-
+max_steps: 15
+consecutive_error_limit: 3
+max_output_truncation: 8000
 model_cost_overrides:
   deepseek/deepseek-chat-v3:
     input_cost_per_million: 0.27
-    output_cost_per_million: 1.10
+    output_cost_per_million: 1.1
+  anthropic/claude-4.6-sonnet-20260217:
+    input_cost_per_million: 3.0
+    output_cost_per_million: 15.0

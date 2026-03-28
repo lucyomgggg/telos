@@ -3,18 +3,6 @@ services:
     image: qdrant/qdrant:latest
     ports:
       - "6333:6333"
-      - "6334:6334"
     volumes:
-      - ./data/qdrant:/qdrant/storage
+      - ./projects/.qdrant:/qdrant/storage
     restart: always
-
-  sandbox:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: telos-agent-sandbox
-    mem_limit: 512m
-    network_mode: bridge
-    volumes:
-      - ./workspace:/workspace
-    restart: unless-stopped

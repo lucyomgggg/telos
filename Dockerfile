@@ -1,14 +1,15 @@
 FROM python:3.11-slim
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    git \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    build-essential git curl jq tree && \
+    rm -rf /var/lib/apt/lists/*
 
-# Set up the workspace
+RUN pip install --no-cache-dir \
+    requests httpx beautifulsoup4 lxml \
+    pandas numpy matplotlib seaborn \
+    pyyaml toml click rich \
+    pytest
+
 WORKDIR /workspace
 
-# Keep the container running
 CMD ["tail", "-f", "/dev/null"]

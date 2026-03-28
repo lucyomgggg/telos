@@ -13,7 +13,7 @@ authors = [
     { name = "Tomh" }
 ]
 dependencies = [
-    "litellm>=1.0.0",
+    "litellm>=1.60.0",
     "qdrant-client>=1.7.0",
     "sqlalchemy>=2.0.0",
     "docker>=7.0.0",

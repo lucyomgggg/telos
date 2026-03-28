@@ -20,7 +20,7 @@ INFRA_CONFIG   = PROJECT_ROOT / "config.yaml"   # インフラ設定（Qdrant、
 PROJECT_CONFIG = PROJECT_ROOT / "telos.yaml"    # プロジェクト設定（モデル、intent）— git管理
 CONFIG_PATH    = PROJECT_CONFIG                  # Settings.save() の書き込み先
 
-TELOS_HOME   = Path(os.getenv("TELOS_HOME", str(PROJECT_ROOT / "data")))
+TELOS_HOME   = Path(os.getenv("TELOS_HOME", str(PROJECT_ROOT / "projects" / "default")))
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 LOG_FILE     = TELOS_HOME / "agent.log"
 PID_FILE     = TELOS_HOME / "telos.pid"

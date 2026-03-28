@@ -158,7 +158,15 @@ class ProducerAgent(BaseAgent):
 
             usage = getattr(response, "usage", None)
             if usage:
-                total_tokens += usage.total_tokens
+                if isinstance(usage, dict):
+                    step_tokens = usage.get('total_tokens') or (
+                        (usage.get('prompt_tokens') or 0) + (usage.get('completion_tokens') or 0)
+                    )
+                else:
+                    step_tokens = getattr(usage, 'total_tokens', None) or (
+                        (getattr(usage, 'prompt_tokens', 0) or 0) + (getattr(usage, 'completion_tokens', 0) or 0)
+                    )
+                total_tokens += step_tokens
                 if not self.llm.validate_token_limit(total_tokens):
                     log.warning(f"Loop {loop_id} exceeded token limit. Aborting.")
                     final_result = "Loop aborted: Exceeded token limit."
@@ -167,7 +175,7 @@ class ProducerAgent(BaseAgent):
             msg = response.choices[0].message
             messages.append(msg.model_dump())
 
-            if msg.tool_calls:
+            if getattr(msg, 'tool_calls', None):
                 had_tool_call = True
                 final_result, consecutive_errors = self._handle_tool_calls(
                     msg.tool_calls, messages, registry, consecutive_errors

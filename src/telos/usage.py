@@ -18,7 +18,14 @@ class CostTracker:
         if not usage:
             return
 
-        tokens = usage.total_tokens
+        if isinstance(usage, dict):
+            tokens = usage.get('total_tokens') or (
+                (usage.get('prompt_tokens') or 0) + (usage.get('completion_tokens') or 0)
+            )
+        else:
+            tokens = getattr(usage, 'total_tokens', None) or (
+                (getattr(usage, 'prompt_tokens', 0) or 0) + (getattr(usage, 'completion_tokens', 0) or 0)
+            )
         model = getattr(response, 'model', 'unknown')
         try:
             # handle both litellm response object and direct usage

@@ -24,7 +24,7 @@ load_dotenv(".env.local")
 
 from .config import (
     init_directories,
-    PID_FILE, LOG_FILE, TELOS_HOME, PROJECT_CONFIG, PROJECT_ROOT, settings,
+    PID_FILE, LOG_FILE, TELOS_HOME, PROJECT_CONFIG, settings,
 )
 
 # Ensure directories and default config exist on import or explicitly via init
@@ -164,6 +164,34 @@ def init(force, non_interactive):
     click.echo("  Run: telos start --loops 10")
     click.echo("═" * 36 + "\n")
 
+def _format_api_error(e: Exception) -> str:
+    """Convert raw LLM/API exceptions to a human-readable message."""
+    import json, re
+    msg = str(e)
+    try:
+        match = re.search(r'\{.*\}', msg, re.DOTALL)
+        if match:
+            data = json.loads(match.group())
+            err = data.get("error", {})
+            code = err.get("code") or err.get("status_code") or ""
+            message = err.get("message", "")
+            if str(code) == "401" or "401" in msg:
+                return (
+                    f"Authentication failed (401): {message}\n"
+                    f"  → Check OPENROUTER_API_KEY in .env\n"
+                    f"  → Get a key at: https://openrouter.ai/keys"
+                )
+            if str(code) == "429" or "429" in msg:
+                return "Rate limit hit (429). Wait a moment and try again."
+            if str(code) == "402" or "billing" in msg.lower() or "insufficient" in msg.lower():
+                return "Insufficient credits (402). Top up at: https://openrouter.ai/credits"
+            if message:
+                return f"API error ({code}): {message}"
+    except Exception:
+        pass
+    return msg
+
+
 def _preflight_check():
     """Verify API keys are set for all configured models."""
     load_dotenv()
@@ -172,29 +200,19 @@ def _preflight_check():
     try:
         from .config import reload_settings
         s = reload_settings()
-        models = [m for m in [
-            s.llm.producer_model,
-            s.llm.goal_gen_model,
-        ] if m is not None]
+        models = [m for m in [s.llm.producer_model, s.llm.goal_gen_model] if m is not None]
     except Exception:
-        click.echo("❌ config.yaml not found or invalid.")
-        click.echo("   Run: telos init")
+        click.echo("❌  telos.yaml not found or invalid. Run setup.sh first.")
         sys.exit(1)
 
-    def get_expected_key(model: str) -> str:
-        provider = model.split("/")[0].upper()
-        return f"{provider}_API_KEY"
+    def _key_for(model: str) -> str:
+        return f"{model.split('/')[0].upper()}_API_KEY"
 
-    missing = []
-    for model in set(models):
-        key_name = get_expected_key(model)
-        if not os.getenv(key_name):
-            missing.append((model, key_name))
-
+    missing = [(_key_for(m), m) for m in set(models) if not os.getenv(_key_for(m))]
     if missing:
-        for model, key_name in missing:
-            click.echo(f"❌ {key_name} is not set (required for {model})")
-        click.echo("   Run: telos init")
+        for key_name, model in missing:
+            click.echo(f"❌  {key_name} is not set (needed for {model})")
+        click.echo("   Add it to .env — see setup.sh for instructions.")
         sys.exit(1)
 
 
@@ -205,15 +223,6 @@ def _preflight_check():
 def start(model, loops, name):
     """Run autonomous loops."""
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-
-    # Warn if projects/ exists but TELOS_HOME is not explicitly set
-    if not os.getenv("TELOS_HOME") and (PROJECT_ROOT / "projects").exists():
-        click.echo(
-            "⚠️  Warning: 'projects/' directory found but TELOS_HOME is not set.\n"
-            "   Add TELOS_HOME=projects/<name> to .env.local to use an existing project.\n"
-            "   Data will be written to: " + str(TELOS_HOME),
-            err=True,
-        )
 
     _preflight_check()
     from .telos_core import AgentLoop
@@ -226,10 +235,11 @@ def start(model, loops, name):
     PID_FILE.write_text(str(os.getpid()))
     session_cost = 0.0
     completed = 0
-    print(f"[Telos] Session started: {agent.session_id[:8]} | {selected_model}")
+    click.echo(f"Session {agent.session_id[:8]}  model={selected_model}  project={TELOS_HOME.name}")
+    click.echo("")
     try:
         for i in range(loops):
-            print(f"[Loop {i+1}] Generating goal...")
+            click.echo(f"[{i+1}/{loops}] Generating goal...")
             loop_data = agent.run_iteration()
 
             loop_cost = loop_data.get("cost_usd", 0.0) or 0.0
@@ -237,7 +247,7 @@ def start(model, loops, name):
             completed += 1
 
             status = loop_data.get("status", "completed")
-            icon = "✅" if status == "completed" else "❌"
+            icon = "✓" if status == "completed" else "✗"
             post = loop_data.get("instincts_post", {})
             instinct_str = (
                 f"C={post.get('curiosity', 0):.2f} "
@@ -245,15 +255,15 @@ def start(model, loops, name):
                 f"G={post.get('growth', 0):.2f} "
                 f"O={post.get('order', 0):.2f}"
             )
-            print(f"[Loop {i+1}] Goal: {loop_data['goal']}")
-            print(f"[Loop {i+1}] {icon} instincts: {instinct_str}")
+            click.echo(f"[{i+1}/{loops}] {icon} {loop_data['goal']}")
+            click.echo(f"      instincts: {instinct_str}  cost: ${loop_cost:.4f}")
 
     except KeyboardInterrupt:
-        print("\n[Telos] Interrupted.")
+        click.echo("\nInterrupted.")
     except Exception as e:
-        print(f"[Loop error] {e}")
+        click.echo(f"\n❌  {_format_api_error(e)}", err=True)
     finally:
-        print(f"[Session] Complete: {completed} loops | ${session_cost:.3f} | JOURNAL updated")
+        click.echo(f"\nDone: {completed}/{loops} loops  total cost: ${session_cost:.4f}")
         agent.shutdown()
         PID_FILE.unlink(missing_ok=True)
 
