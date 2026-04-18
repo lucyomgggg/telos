@@ -1,0 +1,21 @@
+[submodule "monads/monad-builder-template"]
+	path = monads/monad-builder-template
+	url = https://github.com/lucyomgggg/monad-builder-template.git
+[submodule "monads/monad-template"]
+	path = monads/monad-template
+	url = https://github.com/lucyomgggg/monad-template.git
+[submodule "telos-client"]
+	path = telos-client
+	url = https://github.com/lucyomgggg/telos-client.git
+[submodule "telos-core"]
+	path = telos-core
+	url = https://github.com/lucyomgggg/telos-core.git
+[submodule "telos-mcp"]
+	path = telos-mcp
+	url = https://github.com/lucyomgggg/telos-mcp.git
+[submodule "telos-observation"]
+	path = telos-observation
+	url = https://github.com/lucyomgggg/telos-observation.git
+[submodule "telos-stream-hub"]
+	path = telos-stream-hub
+	url = https://github.com/lucyomgggg/telos-stream-hub.git

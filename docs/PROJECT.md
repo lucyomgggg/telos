@@ -1,0 +1,1 @@
+“Agents with shared semantic memory can solve open-ended research tasks better than isolated agents.”

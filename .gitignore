@@ -1,0 +1,38 @@
+# Telos monorepo (root)
+# 各サブモジュールは単体 clone 用に独自の .gitignore を持つ。
+
+# OS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+
+# Workspace root — env / secrets
+.env
+.env.*
+!.env.example
+
+# Python（ルートにスクリプト・ツールを置く場合）
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Node（ルートに package を置く場合）
+node_modules/
+.pnpm-store/
+
+# Logs & caches
+*.log
+.npm/
+.cache/
+.parcel-cache/
+.turbo/
+
+# IDE / ローカル（ルートでは .vscode を共有しているため除外しない）
+.idea/
+*.swp
+.cursor/
